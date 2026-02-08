@@ -116,6 +116,7 @@ jobs:
         category: trivy
 
     - name: Run Grype vulnerability scanner
+      id: grype
       uses: anchore/scan-action@v4
       with:
         image: ghcr.io/${{ github.repository }}:${{ github.sha }}
@@ -127,7 +128,7 @@ jobs:
       uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
-        sarif_file: ${{ steps.scan.outputs.sarif }}
+        sarif_file: ${{ steps.grype.outputs.sarif }}
         category: grype
 
     - name: Maven Dependency Tree Dependency Submission
