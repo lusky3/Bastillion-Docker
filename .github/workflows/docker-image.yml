@@ -88,7 +88,18 @@ jobs:
 
     - name: Wait for image to be available
       if: github.event_name != 'pull_request'
-      run: sleep 10
+      run: |
+        echo "Waiting for image to be available in registry..."
+        for i in {1..30}; do
+          if docker manifest inspect ghcr.io/lusky3/bastillion-docker:main-${{ github.sha }} > /dev/null 2>&1; then
+            echo "Image is available!"
+            exit 0
+          fi
+          echo "Attempt $i/30: Image not yet available, waiting..."
+          sleep 10
+        done
+        echo "Timeout waiting for image"
+        exit 1
 
     - name: Generate SBOM
       if: github.event_name != 'pull_request'
