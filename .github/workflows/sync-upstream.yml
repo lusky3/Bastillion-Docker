@@ -1,0 +1,107 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/bastillion-io/Bastillion.git || true
+          git fetch upstream
+      
+      - name: Check for updates
+        id: check
+        run: |
+          LATEST_UPSTREAM=$(git rev-parse upstream/master)
+          CURRENT_BASE=$(git merge-base HEAD upstream/master)
+          
+          if [ "$LATEST_UPSTREAM" = "$CURRENT_BASE" ]; then
+            echo "No updates available"
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+          else
+            echo "Updates available"
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            echo "upstream_sha=${LATEST_UPSTREAM:0:7}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create sync branch
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          BRANCH_NAME="sync-upstream-${{ steps.check.outputs.upstream_sha }}"
+          git checkout -b "$BRANCH_NAME"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+      
+      - name: Merge upstream changes
+        if: steps.check.outputs.has_updates == 'true'
+        id: merge
+        run: |
+          if git merge upstream/master --no-edit; then
+            echo "merge_status=success" >> $GITHUB_OUTPUT
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+          else
+            echo "merge_status=conflict" >> $GITHUB_OUTPUT
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+            git merge --abort
+          fi
+      
+      - name: Push sync branch
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          git push origin "${{ env.branch_name }}"
+      
+      - name: Create Pull Request
+        if: steps.check.outputs.has_updates == 'true'
+        id: create_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Sync upstream changes (${{ steps.check.outputs.upstream_sha }})`,
+              head: '${{ env.branch_name }}',
+              base: 'main',
+              body: `## Upstream Sync
+              
+              This PR syncs changes from [bastillion-io/Bastillion](https://github.com/bastillion-io/Bastillion).
+              
+              **Upstream commit:** ${{ steps.check.outputs.upstream_sha }}
+              **Merge status:** ${{ steps.merge.outputs.merge_status }}
+              **Has conflicts:** ${{ steps.merge.outputs.has_conflicts }}
+              
+              ${steps.merge.outputs.has_conflicts === 'true' ? '⚠️ **Manual merge required** - conflicts detected' : '✅ Clean merge - will auto-merge after tests pass'}
+              `
+            });
+            return pr.number;
+      
+      - name: Enable auto-merge
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_conflicts == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = ${{ steps.create_pr.outputs.result }};
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              merge_method: 'merge'
+            });
