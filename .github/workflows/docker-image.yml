@@ -12,6 +12,7 @@ permissions:
   contents: read
   packages: write
   security-events: write
+  id-token: write
 
 jobs:
   build-and-push:
