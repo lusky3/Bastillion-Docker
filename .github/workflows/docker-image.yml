@@ -72,26 +72,19 @@ jobs:
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: Build and push Docker image
-      id: build
+    - name: Build Docker image for scanning
       uses: docker/build-push-action@v6
       with:
         context: .
-        platforms: linux/amd64,linux/arm64
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        sbom: true
-        provenance: true
-        outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=false
+        platforms: linux/amd64
         load: true
+        tags: ghcr.io/lusky3/bastillion-docker:scan
+        cache-from: type=gha
 
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@0.28.0
       with:
-        image-ref: ghcr.io/lusky3/bastillion-docker:main
+        image-ref: ghcr.io/lusky3/bastillion-docker:scan
         format: sarif
         output: trivy-results.sarif
 
@@ -106,7 +99,7 @@ jobs:
       id: grype
       uses: anchore/scan-action@v4
       with:
-        image: ghcr.io/lusky3/bastillion-docker:main
+        image: ghcr.io/lusky3/bastillion-docker:scan
         fail-build: false
         severity-cutoff: high
         output-format: sarif
@@ -117,6 +110,20 @@ jobs:
       with:
         sarif_file: ${{ steps.grype.outputs.sarif }}
         category: grype
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        sbom: true
+        provenance: true
 
     - name: Maven Dependency Tree Dependency Submission
       if: github.event_name != 'pull_request'
