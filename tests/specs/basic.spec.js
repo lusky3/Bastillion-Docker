@@ -34,4 +34,9 @@ test.describe('Bastillion Basic Functionality', () => {
     await expect(page).toHaveURL(/\/admin\//);
     await expect(page.locator('body')).toContainText(/Bastillion|Systems|Users|Profile/);
   });
+
+  // Note: SSH system management and terminal connection tests require
+  // completing the first-time admin password change flow, which varies
+  // based on Bastillion configuration. Manual testing recommended for
+  // full end-to-end SSH functionality validation.
 });
