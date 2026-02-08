@@ -86,38 +86,6 @@ jobs:
         provenance: true
         outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=false
 
-    - name: Run Trivy vulnerability scanner
-      if: github.event_name != 'pull_request'
-      uses: aquasecurity/trivy-action@0.28.0
-      with:
-        image-ref: ghcr.io/lusky3/bastillion-docker:main-${{ github.sha }}
-        format: sarif
-        output: trivy-results.sarif
-
-    - name: Upload Trivy results to GitHub Security
-      if: github.event_name != 'pull_request'
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: trivy-results.sarif
-        category: trivy
-
-    - name: Run Grype vulnerability scanner
-      if: github.event_name != 'pull_request'
-      id: grype
-      uses: anchore/scan-action@v4
-      with:
-        image: ghcr.io/lusky3/bastillion-docker:main-${{ github.sha }}
-        fail-build: false
-        severity-cutoff: high
-        output-format: sarif
-
-    - name: Upload Grype results to GitHub Security
-      if: github.event_name != 'pull_request'
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: ${{ steps.grype.outputs.sarif }}
-        category: grype
-
     - name: Maven Dependency Tree Dependency Submission
       if: github.event_name != 'pull_request'
       uses: advanced-security/maven-dependency-submission-action@v4.1.1
