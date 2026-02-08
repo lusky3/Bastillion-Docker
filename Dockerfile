@@ -1,10 +1,11 @@
 # Use a base image to set file permissions
 FROM alpine as file_prep
 
-# Add a description for the Docker image
-LABEL org.opencontainers.image.source="https://github.com/lusky3/Bastillion-Docker/"
-LABEL org.opencontainers.image.description="Bastillion is a web-based SSH console that centrally manages administrative access to systems. Web-based administration is combined with management and distribution of user's public SSH keys."
-LABEL org.opencontainers.image.licenses="Prosperity Public License"
+LABEL org.opencontainers.image.title="Bastillion"
+LABEL org.opencontainers.image.description="Web-based SSH console that centrally manages administrative access to systems with key management and two-factor authentication"
+LABEL org.opencontainers.image.source="https://github.com/lusky3/Bastillion-Docker"
+LABEL org.opencontainers.image.url="https://www.bastillion.io"
+LABEL org.opencontainers.image.licenses="Prosperity-3.0.0"
 
 # Create a directory for the files
 RUN mkdir -p /app
@@ -17,7 +18,11 @@ RUN chown -R 999:999 /app
 # Use the official Jetty 9.4 image with JRE 21
 FROM jetty:9.4-jre21
 
-# Add a description for the Docker image
+LABEL org.opencontainers.image.title="Bastillion"
+LABEL org.opencontainers.image.description="Web-based SSH console that centrally manages administrative access to systems with key management and two-factor authentication"
+LABEL org.opencontainers.image.source="https://github.com/lusky3/Bastillion-Docker"
+LABEL org.opencontainers.image.url="https://www.bastillion.io"
+LABEL org.opencontainers.image.licenses="Prosperity-3.0.0"
 LABEL org.opencontainers.image.source="https://github.com/lusky3/Bastillion-Docker/"
 LABEL org.opencontainers.image.description="Bastillion is a web-based SSH console that centrally manages administrative access to systems. Web-based administration is combined with management and distribution of user's public SSH keys."
 LABEL org.opencontainers.image.licenses="Prosperity Public License"

@@ -125,6 +125,12 @@ jobs:
           type=ref,event=pr
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
+        annotations: |
+          org.opencontainers.image.title=Bastillion
+          org.opencontainers.image.description=Web-based SSH console that centrally manages administrative access to systems with key management and two-factor authentication
+          org.opencontainers.image.url=https://www.bastillion.io
+          org.opencontainers.image.source=https://github.com/lusky3/Bastillion-Docker
+          org.opencontainers.image.licenses=Prosperity-3.0.0
 
     - name: Build Docker image for scanning
       uses: docker/build-push-action@v6
