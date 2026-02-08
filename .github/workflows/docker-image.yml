@@ -84,6 +84,11 @@ jobs:
         cache-to: type=gha,mode=max
         sbom: true
         provenance: true
+        outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=false
+
+    - name: Wait for image to be available
+      if: github.event_name != 'pull_request'
+      run: sleep 10
 
     - name: Generate SBOM
       if: github.event_name != 'pull_request'
@@ -92,6 +97,8 @@ jobs:
         image: ghcr.io/${{ github.repository }}:main-${{ github.sha }}
         format: spdx-json
         output-file: sbom.spdx.json
+        registry-username: ${{ github.actor }}
+        registry-password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload SBOM
       if: github.event_name != 'pull_request'
