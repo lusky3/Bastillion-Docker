@@ -19,11 +19,4 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'docker compose -f ../docker-compose.test.yml up',
-    url: 'http://localhost:9080',
-    reuseExistingServer: !process.env.CI,
-    ignoreHTTPSErrors: true,
-    timeout: 120000,
-  },
 });
