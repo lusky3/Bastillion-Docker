@@ -79,7 +79,6 @@ jobs:
       with:
         webhook: ${{ secrets.DISCORD_WEBHOOK }}
         status: ${{ job.status }}
-        title: ${{ github.event_name == 'pull_request' && format('Sandbox PR #{0}', github.event.pull_request.number) || 'Sandbox Build' }}
+        title: ${{ github.event_name == 'pull_request' && format('Sandbox PR #{0}', github.event.number) || 'Sandbox Build' }}
         description: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || github.event.head_commit.message }}
-        url: ${{ github.event.pull_request.html_url || github.event.head_commit.url }}
         username: GitHub Actions
