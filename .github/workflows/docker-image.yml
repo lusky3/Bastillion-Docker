@@ -64,7 +64,7 @@ jobs:
       with:
         images: |
           ghcr.io/${{ github.repository }}
-          ${{ secrets.DOCKERHUB_USERNAME }}/bastillion
+          ${{ secrets.DOCKERHUB_USERNAME != '' && format('{0}/bastillion', secrets.DOCKERHUB_USERNAME) || '' }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
