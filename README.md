@@ -1,15 +1,61 @@
-![Build](https://github.com/bastillion-io/Bastillion/actions/workflows/github-build.yml/badge.svg)
-![CodeQL](https://github.com/bastillion-io/Bastillion/actions/workflows/codeql-analysis.yml/badge.svg)
+![Build](https://github.com/lusky3/Bastillion-Docker/actions/workflows/docker-image.yml/badge.svg)
+![CodeQL](https://github.com/lusky3/Bastillion-Docker/actions/workflows/codeql-analysis.yml/badge.svg)
 
 ![Bastillion](https://www.bastillion.io/images/bastillion_40x40.png) Bastillion (Docker)
 ======
-This repository contains a version of [Bastillion](https://github.com/bastillion-io/Bastillion) that can be ran with Docker.
+This repository contains a version of [Bastillion](https://github.com/bastillion-io/Bastillion) that can be run with Docker.
 
-It is currently a work-in-progress. 
+## Quick Start
 
-As of the moment, the container is functional without persistant data. Web UI is available at :8080. Settings can be set with ENV variables (see the [Dockerfile](https://github.com/lusky3/Bastillion-Docker/blob/main/Dockerfile) until this Readme is properly updated).
+Pull and run the latest image:
 
-The source is currently forked to address a security issue (java/weak-cryptographic-algorithm) and address outdated dependencies, but will revert to parity once upstream is updated.
+```bash
+docker pull ghcr.io/lusky3/bastillion:latest
+# or
+docker pull lusky3/bastillion:latest
+
+docker run -d -p 8443:8443 ghcr.io/lusky3/bastillion:latest
+```
+
+Access the web UI at https://localhost:8443
+
+Default credentials:
+- Username: `admin`
+- Password: `changeme`
+
+## Multi-Architecture Support
+
+Images are available for:
+- `linux/amd64`
+- `linux/arm64`
+
+## Configuration
+
+Settings can be configured using environment variables. See the [Dockerfile](https://github.com/lusky3/Bastillion-Docker/blob/main/Dockerfile) for available options.
+
+## Security
+
+This repository includes:
+- Automated security scanning with Trivy and Grype
+- CodeQL analysis
+- SBOM generation with attestations
+- Regular dependency updates
+
+Security scan results are available in the [Security tab](https://github.com/lusky3/Bastillion-Docker/security).
+
+## Current Status
+
+The container is functional with the web UI available at port 8443. Persistent data support is a work in progress.
+
+The source is currently forked to address security issues and outdated dependencies, but will revert to parity once upstream is updated.
+
+## Image Registries
+
+Images are published to:
+- GitHub Container Registry: `ghcr.io/lusky3/bastillion`
+- Docker Hub: `lusky3/bastillion`
+
+---
 
 Original Readme
 ------
@@ -263,4 +309,3 @@ Author
 
 + sean.p.kavanagh6@gmail.com
 + https://twitter.com/spkavanagh6
-
