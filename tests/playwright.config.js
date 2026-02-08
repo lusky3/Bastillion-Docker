@@ -8,7 +8,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'html',
   use: {
-    baseURL: 'https://localhost:8443',
+    baseURL: 'http://localhost:9080',
     ignoreHTTPSErrors: true,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
@@ -21,7 +21,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'docker compose -f ../docker-compose.test.yml up',
-    url: 'https://localhost:8443',
+    url: 'http://localhost:9080',
     reuseExistingServer: !process.env.CI,
     ignoreHTTPSErrors: true,
     timeout: 120000,

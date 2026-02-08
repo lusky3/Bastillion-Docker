@@ -2,7 +2,7 @@ services:
   bastillion:
     build: .
     ports:
-      - "8443:8443"
+      - "9080:8080"
     environment:
       - JAVA_OPTS=-Xmx512m
     healthcheck:
@@ -23,7 +23,7 @@ services:
       - USER_PASSWORD=testpass123
       - PASSWORD_ACCESS=true
     ports:
-      - "2222:2222"
+      - "2223:2222"
     networks:
       - test-network
 

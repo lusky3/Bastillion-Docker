@@ -1,0 +1,129 @@
+
+> bastillion-tests@1.0.0 test
+> playwright test
+
+
+Running 4 tests using 1 worker
+
+[1A[2K[1/4] [chromium] › specs/basic.spec.js:4:3 › Bastillion Basic Functionality › should load login page
+[1A[2K  1) [chromium] › specs/basic.spec.js:4:3 › Bastillion Basic Functionality › should load login page 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: locator('input[name="username"]')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 5000ms[22m
+    [2m  - waiting for locator('input[name="username"]')[22m
+
+
+       5 |     await page.goto('/');
+       6 |     await expect(page).toHaveTitle(/Bastillion/);
+    >  7 |     await expect(page.locator('input[name="username"]')).toBeVisible();
+         |                                                          ^
+       8 |     await expect(page.locator('input[name="password"]')).toBeVisible();
+       9 |   });
+      10 |
+        at /home/cody/git/Bastillion-Docker/tests/specs/basic.spec.js:7:58
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/basic-Bastillion-Basic-Functionality-should-load-login-page-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/basic-Bastillion-Basic-Functionality-should-load-login-page-chromium/error-context.md
+
+
+[1A[2K[2/4] [chromium] › specs/basic.spec.js:11:3 › Bastillion Basic Functionality › should login with default credentials
+[1A[2K  2) [chromium] › specs/basic.spec.js:11:3 › Bastillion Basic Functionality › should login with default credentials 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: page.fill: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('input[name="username"]')[22m
+    [2m    - waiting for" http://localhost:9080/login.ktrl;jsessionid=node01617gxj59e3e5vv2z1tg4gkox4.node0?_csrf=OMGIJZLBMX4R6TRMD20T8BKJTA23OJC8" navigation to finish...[22m
+    [2m    - navigated to "http://localhost:9080/login.ktrl;jsessionid=node01617gxj59e3e5vv2z1tg4gkox4.node0?_csrf=OMGIJZLBMX4R6TRMD20T8BKJTA23OJC8"[22m
+
+
+      12 |     await page.goto('/');
+      13 |     
+    > 14 |     await page.fill('input[name="username"]', 'admin');
+         |                ^
+      15 |     await page.fill('input[name="password"]', 'changeme');
+      16 |     await page.click('button[type="submit"], input[type="submit"]');
+      17 |     
+        at /home/cody/git/Bastillion-Docker/tests/specs/basic.spec.js:14:16
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/basic-Bastillion-Basic-Fun-dcb42-in-with-default-credentials-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/basic-Bastillion-Basic-Fun-dcb42-in-with-default-credentials-chromium/error-context.md
+
+
+[1A[2K[3/4] [chromium] › specs/basic.spec.js:25:3 › Bastillion Basic Functionality › should add SSH system
+[1A[2K  3) [chromium] › specs/basic.spec.js:25:3 › Bastillion Basic Functionality › should add SSH system 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: page.fill: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('input[name="username"]')[22m
+    [2m    - waiting for" http://localhost:9080/login.ktrl;jsessionid=node0m56960lh1b4y5f4shmdeztdj5.node0?_csrf=GWXPKLNVSOWIMSQ6T54WCZMW176DC3DG" navigation to finish...[22m
+    [2m    - navigated to "http://localhost:9080/login.ktrl;jsessionid=node0m56960lh1b4y5f4shmdeztdj5.node0?_csrf=GWXPKLNVSOWIMSQ6T54WCZMW176DC3DG"[22m
+
+
+      26 |     // Login first
+      27 |     await page.goto('/');
+    > 28 |     await page.fill('input[name="username"]', 'admin');
+         |                ^
+      29 |     await page.fill('input[name="password"]', 'changeme');
+      30 |     await page.click('button[type="submit"], input[type="submit"]');
+      31 |     await page.waitForURL(/\/admin\//);
+        at /home/cody/git/Bastillion-Docker/tests/specs/basic.spec.js:28:16
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/basic-Bastillion-Basic-Functionality-should-add-SSH-system-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/basic-Bastillion-Basic-Functionality-should-add-SSH-system-chromium/error-context.md
+
+
+[1A[2K[4/4] [chromium] › specs/basic.spec.js:55:3 › Bastillion Basic Functionality › should navigate to terminal page
+[1A[2K  4) [chromium] › specs/basic.spec.js:55:3 › Bastillion Basic Functionality › should navigate to terminal page 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: page.fill: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('input[name="username"]')[22m
+    [2m    - waiting for" http://localhost:9080/login.ktrl;jsessionid=node0sppg6jihkd7d1otfgu77jgs8x6.node0?_csrf=94MO45KFLTTCBY16AFYEG5CEFW9NTG4I" navigation to finish...[22m
+    [2m    - navigated to "http://localhost:9080/login.ktrl;jsessionid=node0sppg6jihkd7d1otfgu77jgs8x6.node0?_csrf=94MO45KFLTTCBY16AFYEG5CEFW9NTG4I"[22m
+
+
+      56 |     // Login
+      57 |     await page.goto('/');
+    > 58 |     await page.fill('input[name="username"]', 'admin');
+         |                ^
+      59 |     await page.fill('input[name="password"]', 'changeme');
+      60 |     await page.click('button[type="submit"], input[type="submit"]');
+      61 |     await page.waitForURL(/\/admin\//);
+        at /home/cody/git/Bastillion-Docker/tests/specs/basic.spec.js:58:16
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/basic-Bastillion-Basic-Fun-6b63e-d-navigate-to-terminal-page-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/basic-Bastillion-Basic-Fun-6b63e-d-navigate-to-terminal-page-chromium/error-context.md
+
+
+[1A[2K  4 failed
+    [chromium] › specs/basic.spec.js:4:3 › Bastillion Basic Functionality › should load login page ─
+    [chromium] › specs/basic.spec.js:11:3 › Bastillion Basic Functionality › should login with default credentials 
+    [chromium] › specs/basic.spec.js:25:3 › Bastillion Basic Functionality › should add SSH system ─
+    [chromium] › specs/basic.spec.js:55:3 › Bastillion Basic Functionality › should navigate to terminal page 
+
+[36m  Serving HTML report at http://localhost:9323. Press Ctrl+C to quit.[39m
