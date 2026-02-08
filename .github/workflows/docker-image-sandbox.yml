@@ -1,4 +1,4 @@
-name: Build and Push Docker Image to GitHub Container Registry
+name: Build and Push Docker Image (Sandbox)
 
 on:
   push:
@@ -9,12 +9,16 @@ on:
       - sandbox
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-
+  build-and-push:
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
     - name: Set up JDK 21
       uses: actions/setup-java@v4
@@ -23,73 +27,48 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: Checkout Bastillion Repository
-      uses: actions/checkout@v4
-      with:
-        repository: lusky3/Bastillion
-        path: Bastillion
-
     - name: Build with Maven
-      run: |
-        cd Bastillion
-        mvn --batch-mode --update-snapshots clean package verify
+      run: mvn --batch-mode --update-snapshots clean package -DskipTests
 
-    - name: Build Docker Image
-      run: |
-        cd Bastillion
-        docker build -t bastillion:sandbox .
-
-  push-to-registry:
-    runs-on: ubuntu-24.04
-    needs: build
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up JDK 21
-      uses: actions/setup-java@v4
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        cache: maven
-
-    - name: Checkout Bastillion Repository
-      uses: actions/checkout@v4
-      with:
-        repository: lusky3/Bastillion
-        path: Bastillion
-
-    - name: Build with Maven
-      run: |
-        cd Bastillion
-        mvn --batch-mode --update-snapshots clean package verify
-    
-    - name: Upload WAR file
+    - name: Upload WAR artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bastillion-war
+        name: bastillion-war-sandbox
         path: target/bastillion-*.war
+        retention-days: 7
 
-    - name: Build Docker Image
-      run: |
-        cd Bastillion
-        docker build -t bastillion:sandbox .
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
 
-    - name: Get Commit SHA
-      id: vars
-      run: echo "::set-output name=sha::$(git rev-parse --short=7 HEAD)"
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
     - name: Log in to GitHub Container Registry
+      if: github.event_name != 'pull_request'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Push Docker Image to GitHub Container Registry
-      run: |
-        docker tag bastillion:sandbox ghcr.io/${{ github.repository_owner }}/bastillion:sandbox
-        docker tag bastillion:sandbox ghcr.io/${{ github.repository_owner }}/bastillion:${{ steps.vars.outputs.sha }}
-        docker push ghcr.io/${{ github.repository_owner }}/bastillion:sandbox
-        docker push ghcr.io/${{ github.repository_owner }}/bastillion:${{ steps.vars.outputs.sha }}
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix=sandbox-
+          type=raw,value=sandbox
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
