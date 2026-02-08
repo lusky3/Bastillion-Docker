@@ -10,29 +10,47 @@ test.describe('Bastillion Basic Functionality', () => {
 
   test('should login with default credentials', async ({ page }) => {
     await page.goto('/');
-    
     await page.fill('input[name="auth.username"]', 'admin');
     await page.fill('input[name="auth.password"]', 'changeme');
     await page.click('#login_btn');
-    
-    // Wait for navigation
     await page.waitForLoadState('networkidle');
     
-    // Check if we're logged in (any admin page)
+    // Should be on userSettings or menu page
     await expect(page).toHaveURL(/\/admin\//);
   });
 
-  test('should access admin area after login', async ({ page }) => {
+  test('should navigate to systems page', async ({ page }) => {
+    // Login
     await page.goto('/');
     await page.fill('input[name="auth.username"]', 'admin');
     await page.fill('input[name="auth.password"]', 'changeme');
     await page.click('#login_btn');
     await page.waitForLoadState('networkidle');
     
-    await expect(page).toHaveURL(/\/admin\//);
+    // Open Manage dropdown and click Systems
+    await page.click('a:has-text("Manage")');
+    await page.click('a:has-text("Systems")');
+    await page.waitForLoadState('networkidle');
+    
+    // Verify we're on systems page
+    await expect(page).toHaveURL(/viewSystems/);
+    await expect(page.locator('body')).toContainText(/Systems|Add/);
   });
 
-  // Note: Full end-to-end SSH testing (adding systems, creating terminals)
-  // is blocked by Bastillion's session management not persisting across
-  // page navigations in Playwright. Manual testing confirms functionality works.
+  test('should navigate to terminals page', async ({ page }) => {
+    // Login
+    await page.goto('/');
+    await page.fill('input[name="auth.username"]', 'admin');
+    await page.fill('input[name="auth.password"]', 'changeme');
+    await page.click('#login_btn');
+    await page.waitForLoadState('networkidle');
+    
+    // Open Secure Shell dropdown and click Terminals
+    await page.click('a:has-text("Secure")');
+    await page.click('a:has-text("Terminals")');
+    await page.waitForLoadState('networkidle');
+    
+    // Verify we're on terminals/sessions page
+    await expect(page).toHaveURL(/createTerms|viewSystems/);
+  });
 });
