@@ -1,0 +1,32 @@
+services:
+  bastillion:
+    build: .
+    ports:
+      - "8443:8443"
+    environment:
+      - JAVA_OPTS=-Xmx512m
+    healthcheck:
+      test: ["CMD", "curl", "-k", "-f", "https://localhost:8443"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - test-network
+
+  ssh-target:
+    image: lscr.io/linuxserver/openssh-server:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - USER_NAME=testuser
+      - USER_PASSWORD=testpass123
+      - PASSWORD_ACCESS=true
+    ports:
+      - "2222:2222"
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge
