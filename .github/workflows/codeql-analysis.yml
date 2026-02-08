@@ -49,3 +49,13 @@ jobs:
       uses: github/codeql-action/analyze@v3
       with:
         category: "/language:${{ matrix.language }}"
+
+    - name: Discord notification
+      if: failure()
+      uses: sarisia/actions-status-discord@v1
+      with:
+        webhook: ${{ secrets.DISCORD_WEBHOOK }}
+        status: failure
+        title: CodeQL Analysis Failed
+        description: "Language: ${{ matrix.language }}"
+        username: GitHub Actions
