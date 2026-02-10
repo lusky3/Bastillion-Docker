@@ -72,23 +72,32 @@ jobs:
         if: steps.check.outputs.has_updates == 'true'
         id: create_pr
         uses: actions/github-script@v7
+        env:
+          UPSTREAM_SHA: ${{ steps.check.outputs.upstream_sha }}
+          MERGE_STATUS: ${{ steps.merge.outputs.merge_status }}
+          HAS_CONFLICTS: ${{ steps.merge.outputs.has_conflicts }}
         with:
           script: |
+            const hasConflicts = process.env.HAS_CONFLICTS === 'true';
+            const statusMessage = hasConflicts 
+              ? '⚠️ **Manual merge required** - conflicts detected'
+              : '✅ Clean merge - will auto-merge after tests pass';
+            
             const { data: pr } = await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Sync upstream changes (${{ steps.check.outputs.upstream_sha }})`,
+              title: `Sync upstream changes (${process.env.UPSTREAM_SHA})`,
               head: '${{ env.branch_name }}',
               base: 'main',
               body: `## Upstream Sync
               
               This PR syncs changes from [bastillion-io/Bastillion](https://github.com/bastillion-io/Bastillion).
               
-              **Upstream commit:** ${{ steps.check.outputs.upstream_sha }}
-              **Merge status:** ${{ steps.merge.outputs.merge_status }}
-              **Has conflicts:** ${{ steps.merge.outputs.has_conflicts }}
+              **Upstream commit:** ${process.env.UPSTREAM_SHA}
+              **Merge status:** ${process.env.MERGE_STATUS}
+              **Has conflicts:** ${process.env.HAS_CONFLICTS}
               
-              ${steps.merge.outputs.has_conflicts === 'true' ? '⚠️ **Manual merge required** - conflicts detected' : '✅ Clean merge - will auto-merge after tests pass'}
+              ${statusMessage}
               `
             });
             return pr.number;
