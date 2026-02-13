@@ -31,16 +31,19 @@ jobs:
       - name: Check for updates
         id: check
         run: |
-          LATEST_UPSTREAM=$(git rev-parse upstream/master)
-          CURRENT_BASE=$(git merge-base HEAD upstream/master)
+          # Check if there are commits in upstream/master that aren't in main
+          # This accounts for diverged histories and cherry-picks
+          COMMITS_TO_MERGE=$(git rev-list --count HEAD..upstream/master)
           
-          if [ "$LATEST_UPSTREAM" = "$CURRENT_BASE" ]; then
-            echo "No updates available"
+          if [ "$COMMITS_TO_MERGE" -eq 0 ]; then
+            echo "No new commits to merge from upstream"
             echo "has_updates=false" >> $GITHUB_OUTPUT
           else
-            echo "Updates available"
+            echo "Found $COMMITS_TO_MERGE commits to merge from upstream"
+            LATEST_UPSTREAM=$(git rev-parse upstream/master)
             echo "has_updates=true" >> $GITHUB_OUTPUT
             echo "upstream_sha=${LATEST_UPSTREAM:0:7}" >> $GITHUB_OUTPUT
+            echo "commits_count=$COMMITS_TO_MERGE" >> $GITHUB_OUTPUT
           fi
       
       - name: Create sync branch
@@ -55,21 +58,31 @@ jobs:
         id: merge
         run: |
           if git merge upstream/master --no-edit; then
-            echo "merge_status=success" >> $GITHUB_OUTPUT
-            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+            # Check if merge created any commits
+            COMMITS_AHEAD=$(git rev-list --count origin/main..HEAD)
+            if [ "$COMMITS_AHEAD" -gt 0 ]; then
+              echo "merge_status=success" >> $GITHUB_OUTPUT
+              echo "has_conflicts=false" >> $GITHUB_OUTPUT
+              echo "has_commits=true" >> $GITHUB_OUTPUT
+            else
+              echo "merge_status=no_changes" >> $GITHUB_OUTPUT
+              echo "has_conflicts=false" >> $GITHUB_OUTPUT
+              echo "has_commits=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "merge_status=conflict" >> $GITHUB_OUTPUT
             echo "has_conflicts=true" >> $GITHUB_OUTPUT
+            echo "has_commits=false" >> $GITHUB_OUTPUT
             git merge --abort
           fi
       
       - name: Push sync branch
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_commits == 'true'
         run: |
           git push origin "${{ env.branch_name }}"
       
       - name: Create Pull Request
-        if: steps.check.outputs.has_updates == 'true'
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_commits == 'true'
         id: create_pr
         uses: actions/github-script@v7
         env:
@@ -103,7 +116,7 @@ jobs:
             return pr.number;
       
       - name: Enable auto-merge
-        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_conflicts == 'false'
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_commits == 'true' && steps.merge.outputs.has_conflicts == 'false'
         uses: actions/github-script@v7
         with:
           script: |
