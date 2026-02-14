@@ -57,10 +57,16 @@ jobs:
         if: steps.check.outputs.has_updates == 'true'
         id: merge
         run: |
-          if git merge upstream/master --no-edit; then
+          # Merge with strategy to keep our workflows
+          if git merge upstream/master --no-edit -X ours; then
+            # Restore our workflows (keep ours, not upstream's)
+            git checkout HEAD -- .github/workflows/
+            
             # Check if merge created any commits
             COMMITS_AHEAD=$(git rev-list --count origin/main..HEAD)
             if [ "$COMMITS_AHEAD" -gt 0 ]; then
+              # Amend the merge commit to include workflow exclusion
+              git commit --amend --no-edit
               echo "merge_status=success" >> $GITHUB_OUTPUT
               echo "has_conflicts=false" >> $GITHUB_OUTPUT
               echo "has_commits=true" >> $GITHUB_OUTPUT
