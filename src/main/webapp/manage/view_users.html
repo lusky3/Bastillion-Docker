@@ -4,11 +4,11 @@
  *    Licensed under The Prosperity Public License 3.0.0
  */-->
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
+<html xmlns:th="http://www.thymeleaf.org" data-bs-theme="dark">
 
 <head>
 
-    <meta th:replace="_res/inc/header">
+    <meta th:replace="~{_res/inc/header}">
 
     <script th:inline="javascript">
         /*<![CDATA[*/
@@ -88,7 +88,7 @@
 </head>
 
 <body>
-<div th:replace="_res/inc/navigation"></div>
+<div th:replace="~{_res/inc/navigation}"></div>
 <div class="container">
     <form id="viewUsers" th:action="@{/manage/viewUsers.ktrl}" method="get">
         <input type="hidden" name="_csrf" th:value="${session._csrf}">
@@ -149,6 +149,7 @@
             </tbody>
         </table>
     </div>
+    <p class="error" th:if="${sortedSet.itemList == null || sortedSet.itemList.empty}">No users defined yet</p>
     <button class="btn btn-secondary add_btn spacer spacer-bottom" data-bs-toggle="modal"
             data-bs-target="#add_dialog">Add User</button>
     <div id="add_dialog" class="modal fade">
@@ -160,7 +161,7 @@
                 </div>
                 <div class="modal-body">
                     <div class="row">
-                        <div th:replace="_res/inc/errors"></div>
+                        <div th:replace="~{_res/inc/errors}"></div>
                         <form th:action="@{/manage/saveUser.ktrl}" method="post" class="save_user_form_add"
                               autocomplete="off">
                             <table>
@@ -257,7 +258,7 @@
                     </div>
                     <div class="modal-body">
                         <div class="row">
-                            <div th:replace="_res/inc/errors"></div>
+                            <div th:replace="~{_res/inc/errors}"></div>
                             <form th:action="@{/manage/saveUser.ktrl}" method="post" th:id="'save_user_form_edit_' + ${u.id}"
                                   autocomplete="off">
                                 <table>

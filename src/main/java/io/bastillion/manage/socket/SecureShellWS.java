@@ -14,9 +14,9 @@ import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.http.HttpSession;
-import javax.websocket.*;
-import javax.websocket.server.ServerEndpoint;
+import jakarta.servlet.http.HttpSession;
+import jakarta.websocket.*;
+import jakarta.websocket.server.ServerEndpoint;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.sql.SQLException;
@@ -57,11 +57,11 @@ public class SecureShellWS {
             this.session = session;
 
             run = new SentOutputTask(sessionId, session, UserDB.getUser(AuthUtil.getUserId(httpSession)));
+            Thread thread = new Thread(run);
+            thread.start();
         } catch (GeneralSecurityException | SQLException ex) {
             log.error(ex.toString(), ex);
         }
-        Thread thread = new Thread(run);
-        thread.start();
 
     }
 
@@ -109,7 +109,11 @@ public class SecureShellWS {
 
     @OnError
     public void onError(Session session, Throwable t) {
-        log.error(t.toString(), t);
+        log.error("Error occurred in WebSocket session ID: {} (Bastillion Session ID: {}) - Exception: {}",
+                session != null ? session.getId() : "unknown",
+                this.sessionId != null ? this.sessionId : "unknown",
+                t.toString(),
+                t);
     }
 
 

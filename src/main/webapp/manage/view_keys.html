@@ -4,11 +4,11 @@
  *    Licensed under The Prosperity Public License 3.0.0
  */-->
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
+<html xmlns:th="http://www.thymeleaf.org" data-bs-theme="dark">
 
 <head>
 
-    <meta th:replace="_res/inc/header">
+    <meta th:replace="~{_res/inc/header}">
 
     <script th:inline="javascript">
         /*<![CDATA[*/
@@ -82,7 +82,7 @@
 </head>
 
 <body>
-<div th:replace="_res/inc/navigation"></div>
+<div th:replace="~{_res/inc/navigation}"></div>
 <div class="container">
     <h3>View / Disable SSH Keys</h3>
     <p>Disabling will remove the public key from all host systems. Additional
@@ -194,6 +194,7 @@
             </tbody>
         </table>
     </div>
+    <p class="error" th:if="${sortedSet.itemList == null || sortedSet.itemList.empty}">No SSH keys defined yet</p>
 </div>
 </body>
 
