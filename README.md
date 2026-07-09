@@ -14,14 +14,19 @@ docker pull ghcr.io/lusky3/bastillion:latest
 # or
 docker pull lusky3/bastillion:latest
 
-docker run -d -p 8443:8443 ghcr.io/lusky3/bastillion:latest
+docker run -d -p 8443:8443 -v bastillion-data:/opt/bastillion/data ghcr.io/lusky3/bastillion:latest
 ```
 
-Access the web UI at https://localhost:8443
+Access the web UI at https://localhost:8443 (TLS is on by default with a self-signed
+certificate generated at first start; set `TLS_ENABLED=false` to serve plain HTTP,
+e.g. behind a reverse proxy).
 
 Default credentials:
 - Username: `admin`
 - Password: `changeme`
+
+Runtime state (H2 database, generated SSH keys, TLS keystore, config) lives in
+`/opt/bastillion/data` — mount a volume there to persist it across upgrades.
 
 ## Multi-Architecture Support
 
@@ -31,7 +36,15 @@ Images are available for:
 
 ## Configuration
 
-Settings can be configured using environment variables. See the [Dockerfile](https://github.com/lusky3/Bastillion-Docker/blob/main/Dockerfile) for available options.
+Every setting in `BastillionConfig.properties` can be overridden with an environment
+variable using its SCREAMING_SNAKE_CASE name — `sshKeyType` → `SSH_KEY_TYPE`,
+`dbPassword` → `DB_PASSWORD`, `licenseKey` → `LICENSE_KEY`, and so on. This is read
+natively by the application; no config-file templating happens in the container.
+
+Notable since v5 (upstream changes):
+- Generated SSH keys default to `ed25519` (set `SSH_KEY_TYPE`/`SSH_KEY_LENGTH` to change)
+- Unlicensed installs are capped at 5 managed systems (`LICENSE_KEY` lifts the cap)
+- SSH agent forwarding support was removed upstream
 
 ## Security
 
@@ -45,7 +58,7 @@ Security scan results are available in the [Security tab](https://github.com/lus
 
 ## Current Status
 
-The container is functional with the web UI available at port 8443. Persistent data support is a work in progress.
+The container is functional with the web UI available at port 8443. Persistent data is supported via the `/opt/bastillion/data` volume.
 
 The source is currently forked to address security issues and outdated dependencies, but will revert to parity once upstream is updated.
 
