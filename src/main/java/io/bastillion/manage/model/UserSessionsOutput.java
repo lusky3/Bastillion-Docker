@@ -5,7 +5,6 @@
  */
 package io.bastillion.manage.model;
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -15,8 +14,11 @@ public class UserSessionsOutput {
     Map<Integer, SessionOutput> sessionOutputMap = new ConcurrentHashMap<>();
 
 
+    // Returns the live map on purpose: SessionOutputUtil routes terminal output by
+    // mutating it (put/remove/clear). ConcurrentHashMap provides the thread safety; an
+    // unmodifiable view here breaks all web-terminal output.
     public Map<Integer, SessionOutput> getSessionOutputMap() {
-        return Collections.unmodifiableMap(sessionOutputMap);
+        return sessionOutputMap;
     }
 
     public void setSessionOutputMap(Map<Integer, SessionOutput> sessionOutputMap) {

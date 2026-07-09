@@ -6,7 +6,6 @@
 package io.bastillion.manage.model;
 
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -15,8 +14,11 @@ public class UserSchSessions {
     Map<Integer, SchSession> schSessionMap = new ConcurrentHashMap<>();
 
 
+    // Returns the live map on purpose: SSHUtil, SecureShellKtrl, and SecureShellWS all
+    // mutate it to track sessions. ConcurrentHashMap provides the thread safety; an
+    // unmodifiable copy here breaks terminal creation (UnsupportedOperationException).
     public Map<Integer, SchSession> getSchSessionMap() {
-        return Collections.unmodifiableMap(new ConcurrentHashMap<>(schSessionMap));
+        return schSessionMap;
     }
 
     public void setSchSessionMap(Map<Integer, SchSession> schSessionMap) {
