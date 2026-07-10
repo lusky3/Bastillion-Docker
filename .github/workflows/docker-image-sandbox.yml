@@ -28,7 +28,7 @@ jobs:
         cache: maven
 
     - name: Build with Maven
-      run: mvn --batch-mode --update-snapshots clean package -DskipTests
+      run: ./patches/lift-system-cap.sh && mvn --batch-mode --update-snapshots clean package -DskipTests
 
   build-and-push:
     needs: test
@@ -46,7 +46,7 @@ jobs:
         cache: maven
 
     - name: Build with Maven
-      run: mvn --batch-mode --update-snapshots clean package -DskipTests
+      run: ./patches/lift-system-cap.sh && mvn --batch-mode --update-snapshots clean package -DskipTests
 
     - name: Upload jar artifact
       uses: actions/upload-artifact@v7

@@ -25,7 +25,7 @@ jobs:
           cache: 'maven'
 
       - name: Build application jar
-        run: mvn --batch-mode --update-snapshots clean package -DskipTests
+        run: ./patches/lift-system-cap.sh && mvn --batch-mode --update-snapshots clean package -DskipTests
 
       - name: Build Docker image
         run: docker build -t bastillion-test .

@@ -43,8 +43,9 @@ natively by the application; no config-file templating happens in the container.
 
 Notable since v5 (upstream changes):
 - Generated SSH keys default to `ed25519` (set `SSH_KEY_TYPE`/`SSH_KEY_LENGTH` to change)
-- Unlicensed installs are capped at 5 managed systems (`LICENSE_KEY` lifts the cap)
 - SSH agent forwarding support was removed upstream
+- Upstream added a 5-managed-system cap for unlicensed instances; this fork lifts it
+  for noncommercial self-hosting (see [License & Commercial Use](#license--commercial-use))
 
 ## Security
 
@@ -61,6 +62,29 @@ Security scan results are available in the [Security tab](https://github.com/lus
 The container is functional with the web UI available at port 8443. Persistent data is supported via the `/opt/bastillion/data` volume.
 
 The source is currently forked to address security issues and outdated dependencies, but will revert to parity once upstream is updated.
+
+## License & Commercial Use
+
+Bastillion is published by Loophole, LLC under the
+[Prosperity Public License 3.0.0](LICENSE.md). In short:
+
+- **Noncommercial use is free and unlimited** — personal, hobby, research,
+  educational, nonprofit, and government use are all explicitly *not* commercial
+  under the license.
+- **Commercial use is a 30-day trial, then requires a paid license** from
+  [bastillion.io](https://www.bastillion.io/).
+
+Upstream v5 added a technical cap limiting unlicensed instances to 5 managed
+systems (lifted by a paid `LICENSE_KEY`). **This fork is intended for
+noncommercial, self-hosted use only, and lifts that cap at build time** — the
+tracked source stays identical to upstream; the change is applied by
+[`patches/lift-system-cap.sh`](patches/lift-system-cap.sh) just before compiling.
+
+> [!IMPORTANT]
+> **Commercial use is not permitted through this fork or its images.** If you use
+> Bastillion for commercial purposes, obtain a license directly from
+> [bastillion.io](https://www.bastillion.io/) — do not use this image to
+> circumvent upstream's licensing.
 
 ## Image Registries
 
