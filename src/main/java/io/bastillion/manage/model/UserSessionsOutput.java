@@ -13,16 +13,20 @@ public class UserSessionsOutput {
     //instance id, host output
     Map<Integer, SessionOutput> sessionOutputMap = new ConcurrentHashMap<>();
 
-
-    // Returns the live map on purpose: SessionOutputUtil routes terminal output by
-    // mutating it (put/remove/clear). ConcurrentHashMap provides the thread safety; an
-    // unmodifiable view here breaks all web-terminal output.
+    /**
+     * Intentionally returns the live map, not a defensive copy - SessionOutputUtil
+     * (addOutput/addToOutput/removeOutput/getOutput) reads and mutates session output
+     * through this reference from multiple threads (the websocket thread and the SSH
+     * output-reader thread). Wrapping this in an unmodifiable/copied view breaks that
+     * (see the "exposing internal representation" autofix reverted here - it silently
+     * broke every terminal session with an UnsupportedOperationException on write).
+     */
     public Map<Integer, SessionOutput> getSessionOutputMap() {
         return sessionOutputMap;
     }
 
     public void setSessionOutputMap(Map<Integer, SessionOutput> sessionOutputMap) {
-        this.sessionOutputMap = new ConcurrentHashMap<>(sessionOutputMap);
+        this.sessionOutputMap = sessionOutputMap;
     }
 }
 
