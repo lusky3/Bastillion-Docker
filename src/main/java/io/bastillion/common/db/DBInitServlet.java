@@ -12,16 +12,16 @@ import io.bastillion.manage.util.DBUtils;
 import io.bastillion.manage.util.EncryptionUtil;
 import io.bastillion.manage.util.RefreshAuthKeyUtil;
 import io.bastillion.manage.util.SSHUtil;
-import org.apache.commons.configuration.ConfigurationException;
+import org.apache.commons.configuration2.ex.ConfigurationException;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.ServletConfig;
-import javax.servlet.ServletException;
-import javax.servlet.annotation.WebServlet;
+import jakarta.servlet.ServletConfig;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.WebServlet;
 import java.io.File;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -39,7 +39,7 @@ import java.util.Scanner;
 @WebServlet(name = "DBInitServlet",
         urlPatterns = {"/config"},
         loadOnStartup = 1)
-public class DBInitServlet extends javax.servlet.http.HttpServlet {
+public class DBInitServlet extends jakarta.servlet.http.HttpServlet {
 
     private static final Logger log = LoggerFactory.getLogger(DBInitServlet.class);
 
@@ -120,14 +120,14 @@ public class DBInitServlet extends javax.servlet.http.HttpServlet {
 
                 //if exists readfile to set default password
                 String salt = EncryptionUtil.generateSalt();
-                String defaultPassword = EncryptionUtil.hash("changeme" + salt);
+                String defaultPassword = EncryptionUtil.hashV2("changeme", salt);
 
                 //set password if running in EC2
                 File file = new File("/opt/bastillion/instance_id");
                 if (file.exists()) {
                     String str = FileUtils.readFileToString(file, "UTF-8");
                     if (StringUtils.isNotEmpty(str)) {
-                        defaultPassword = EncryptionUtil.hash(str.trim() + salt);
+                        defaultPassword = EncryptionUtil.hashV2(str.trim(), salt);
                     }
                 }
 
@@ -186,7 +186,7 @@ public class DBInitServlet extends javax.servlet.http.HttpServlet {
             DBUtils.closeStmt(statement);
             DBUtils.closeConn(connection);
 
-        } catch (SQLException | ConfigurationException | IOException | GeneralSecurityException | JSchException ex) {
+        } catch (SQLException | ConfigurationException | InterruptedException| IOException | GeneralSecurityException | JSchException ex) {
             log.error(ex.toString(), ex);
             throw new ServletException(ex.toString(), ex);
         }

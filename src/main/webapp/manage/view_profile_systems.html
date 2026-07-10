@@ -4,11 +4,11 @@
  *    Licensed under The Prosperity Public License 3.0.0
  */-->
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
+<html xmlns:th="http://www.thymeleaf.org" data-bs-theme="dark">
 
 <head>
 
-    <meta th:replace="_res/inc/header">
+    <meta th:replace="~{_res/inc/header}">
 
     <script th:inline="javascript">
         /*<![CDATA[*/
@@ -57,7 +57,7 @@
 </head>
 
 <body>
-<div th:replace="_res/inc/navigation"></div>
+<div th:replace="~{_res/inc/navigation}"></div>
 <div class="container">
     <form id="viewProfileSystems" th:action="@{/manage/viewProfileSystems.ktrl}"
           method="get">
