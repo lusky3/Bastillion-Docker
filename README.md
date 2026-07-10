@@ -61,7 +61,12 @@ Security scan results are available in the [Security tab](https://github.com/lus
 
 The container is functional with the web UI available at port 8443. Persistent data is supported via the `/opt/bastillion/data` volume.
 
-The source is currently forked to address security issues and outdated dependencies, but will revert to parity once upstream is updated.
+This fork exists to provide Docker packaging (upstream ships no Dockerfile or
+official image) and builds from upstream `main` so the image includes security
+fixes landed after the latest tagged release. The tracked source tracks upstream
+verbatim; the only behavioral change is the build-time patch documented under
+[License & Commercial Use](#license--commercial-use). The earlier need to carry
+independent dependency bumps went away once upstream modernized the stack in v5.
 
 ## License & Commercial Use
 
