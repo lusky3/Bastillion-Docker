@@ -1,0 +1,24 @@
+name: Verify Action Pins
+
+# Catches unresolvable action pins on PRs. The publish job that references most
+# actions only runs on push to main, so this lightweight check is what surfaces
+# a bad `uses: ...@tag` before it merges and breaks the release build.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/scripts/verify-action-pins.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify every action pin resolves
+        run: ./.github/scripts/verify-action-pins.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
