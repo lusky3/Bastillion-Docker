@@ -121,6 +121,14 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_KEY }}
 
+    - name: Derive version tags from pom
+      id: ver
+      run: |
+        # Project version is the first <version> in pom.xml (5.0.1-SNAPSHOT -> 5.0.1)
+        V=$(grep -m1 '<version>' pom.xml | sed -E 's/.*<version>([^<]+)<.*/\1/' | sed 's/-SNAPSHOT//')
+        echo "major=${V%%.*}" >> "$GITHUB_OUTPUT"
+        echo "minor=$(echo "$V" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
+
     - name: Extract metadata
       id: meta
       uses: docker/metadata-action@v6
@@ -133,6 +141,8 @@ jobs:
           type=ref,event=pr
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=${{ steps.ver.outputs.minor }},enable={{is_default_branch}}
+          type=raw,value=${{ steps.ver.outputs.major }},enable={{is_default_branch}}
         annotations: |
           org.opencontainers.image.title=Bastillion
           org.opencontainers.image.description=Web-based SSH console that centrally manages administrative access to systems with key management and two-factor authentication

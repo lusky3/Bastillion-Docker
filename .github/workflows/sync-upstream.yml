@@ -31,16 +31,16 @@ jobs:
       - name: Check for updates
         id: check
         run: |
-          # Check if there are commits in upstream/master that aren't in main
+          # Check if there are commits in upstream/main that aren't in main
           # This accounts for diverged histories and cherry-picks
-          COMMITS_TO_MERGE=$(git rev-list --count HEAD..upstream/master)
+          COMMITS_TO_MERGE=$(git rev-list --count HEAD..upstream/main)
           
           if [ "$COMMITS_TO_MERGE" -eq 0 ]; then
             echo "No new commits to merge from upstream"
             echo "has_updates=false" >> $GITHUB_OUTPUT
           else
             echo "Found $COMMITS_TO_MERGE commits to merge from upstream"
-            LATEST_UPSTREAM=$(git rev-parse upstream/master)
+            LATEST_UPSTREAM=$(git rev-parse upstream/main)
             echo "has_updates=true" >> $GITHUB_OUTPUT
             echo "upstream_sha=${LATEST_UPSTREAM:0:7}" >> $GITHUB_OUTPUT
             echo "commits_count=$COMMITS_TO_MERGE" >> $GITHUB_OUTPUT
@@ -58,7 +58,7 @@ jobs:
         id: merge
         run: |
           # Merge with strategy to keep our workflows
-          if git merge upstream/master --no-edit -X ours; then
+          if git merge upstream/main --no-edit -X ours; then
             # Restore our workflows (keep ours, not upstream's)
             git checkout HEAD -- .github/workflows/
             
