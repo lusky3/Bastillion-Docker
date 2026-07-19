@@ -94,10 +94,10 @@ public class OTPUtil {
 
         byte[] key = new Base32().decode(secret);
 
-        SecretKeySpec secretKey = new SecretKeySpec(key, "HmacSHA256");
+        SecretKeySpec secretKey = new SecretKeySpec(key, "HmacSHA1");
 
         try {
-            Mac mac = Mac.getInstance("HmacSHA256");
+            Mac mac = Mac.getInstance("HmacSHA1");
             mac.init(secretKey);
             byte[] hash = mac.doFinal(ByteBuffer.allocate(8).putLong(time).array());
 
