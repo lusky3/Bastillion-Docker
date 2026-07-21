@@ -40,29 +40,24 @@ public class ScriptDB {
 
         ArrayList<Script> scriptList = new ArrayList<>();
 
-        String orderBy = "";
-        if (sortedSet.getOrderByField() != null && !sortedSet.getOrderByField().trim().equals("")) {
-            orderBy = "order by " + sortedSet.getOrderByField() + " " + sortedSet.getOrderByDirection();
+        String orderBy = sortedSet.toOrderByClause();
+        String sql = "select * from scripts where user_id=?" + orderBy;
+
+        try (Connection con = DBUtils.getConn();
+             PreparedStatement stmt = con.prepareStatement(sql)) {
+            stmt.setLong(1, userId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    Script script = new Script();
+                    script.setId(rs.getLong("id"));
+                    script.setDisplayNm(rs.getString(DISPLAY_NM));
+                    script.setScript(rs.getString("script"));
+
+                    scriptList.add(script);
+
+                }
+            }
         }
-        String sql = "select * from scripts where user_id=? " + orderBy;
-
-        Connection con = DBUtils.getConn();
-        PreparedStatement stmt = con.prepareStatement(sql);
-        stmt.setLong(1, userId);
-        ResultSet rs = stmt.executeQuery();
-
-        while (rs.next()) {
-            Script script = new Script();
-            script.setId(rs.getLong("id"));
-            script.setDisplayNm(rs.getString(DISPLAY_NM));
-            script.setScript(rs.getString("script"));
-
-            scriptList.add(script);
-
-        }
-        DBUtils.closeRs(rs);
-        DBUtils.closeStmt(stmt);
-        DBUtils.closeConn(con);
 
         sortedSet.setItemList(scriptList);
         return sortedSet;
@@ -78,11 +73,9 @@ public class ScriptDB {
      */
     public static Script getScript(Long scriptId, Long userId) throws SQLException, GeneralSecurityException {
 
-        Connection con = DBUtils.getConn();
-        Script script = getScript(con, scriptId, userId);
-        DBUtils.closeConn(con);
-
-        return script;
+        try (Connection con = DBUtils.getConn()) {
+            return getScript(con, scriptId, userId);
+        }
     }
 
     /**
@@ -96,20 +89,18 @@ public class ScriptDB {
     public static Script getScript(Connection con, Long scriptId, Long userId) throws SQLException {
 
         Script script = null;
-        PreparedStatement stmt = con.prepareStatement("select * from  scripts where id=? and user_id=?");
-        stmt.setLong(1, scriptId);
-        stmt.setLong(2, userId);
-        ResultSet rs = stmt.executeQuery();
-
-        while (rs.next()) {
-            script = new Script();
-            script.setId(rs.getLong("id"));
-            script.setDisplayNm(rs.getString(DISPLAY_NM));
-            script.setScript(rs.getString("script"));
+        try (PreparedStatement stmt = con.prepareStatement("select * from  scripts where id=? and user_id=?")) {
+            stmt.setLong(1, scriptId);
+            stmt.setLong(2, userId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    script = new Script();
+                    script.setId(rs.getLong("id"));
+                    script.setDisplayNm(rs.getString(DISPLAY_NM));
+                    script.setScript(rs.getString("script"));
+                }
+            }
         }
-        DBUtils.closeRs(rs);
-        DBUtils.closeStmt(stmt);
-
 
         return script;
     }
@@ -122,14 +113,13 @@ public class ScriptDB {
      */
     public static void insertScript(Script script, Long userId) throws SQLException, GeneralSecurityException {
 
-        Connection con = DBUtils.getConn();
-        PreparedStatement stmt = con.prepareStatement("insert into scripts (display_nm, script, user_id) values (?,?,?)");
-        stmt.setString(1, script.getDisplayNm());
-        stmt.setString(2, script.getScript());
-        stmt.setLong(3, userId);
-        stmt.execute();
-        DBUtils.closeStmt(stmt);
-        DBUtils.closeConn(con);
+        try (Connection con = DBUtils.getConn();
+             PreparedStatement stmt = con.prepareStatement("insert into scripts (display_nm, script, user_id) values (?,?,?)")) {
+            stmt.setString(1, script.getDisplayNm());
+            stmt.setString(2, script.getScript());
+            stmt.setLong(3, userId);
+            stmt.execute();
+        }
     }
 
     /**
@@ -140,15 +130,14 @@ public class ScriptDB {
      */
     public static void updateScript(Script script, Long userId) throws SQLException, GeneralSecurityException {
 
-        Connection con = DBUtils.getConn();
-        PreparedStatement stmt = con.prepareStatement("update scripts set display_nm=?, script=? where id=? and user_id=?");
-        stmt.setString(1, script.getDisplayNm());
-        stmt.setString(2, script.getScript());
-        stmt.setLong(3, script.getId());
-        stmt.setLong(4, userId);
-        stmt.execute();
-        DBUtils.closeStmt(stmt);
-        DBUtils.closeConn(con);
+        try (Connection con = DBUtils.getConn();
+             PreparedStatement stmt = con.prepareStatement("update scripts set display_nm=?, script=? where id=? and user_id=?")) {
+            stmt.setString(1, script.getDisplayNm());
+            stmt.setString(2, script.getScript());
+            stmt.setLong(3, script.getId());
+            stmt.setLong(4, userId);
+            stmt.execute();
+        }
     }
 
     /**
@@ -159,12 +148,11 @@ public class ScriptDB {
      */
     public static void deleteScript(Long scriptId, Long userId) throws SQLException, GeneralSecurityException {
 
-        Connection con = DBUtils.getConn();
-        PreparedStatement stmt = con.prepareStatement("delete from scripts where id=? and user_id=?");
-        stmt.setLong(1, scriptId);
-        stmt.setLong(2, userId);
-        stmt.execute();
-        DBUtils.closeStmt(stmt);
-        DBUtils.closeConn(con);
+        try (Connection con = DBUtils.getConn();
+             PreparedStatement stmt = con.prepareStatement("delete from scripts where id=? and user_id=?")) {
+            stmt.setLong(1, scriptId);
+            stmt.setLong(2, userId);
+            stmt.execute();
+        }
     }
 }
