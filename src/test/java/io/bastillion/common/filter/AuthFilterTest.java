@@ -5,10 +5,10 @@
  */
 package io.bastillion.common.filter;
 
+import io.bastillion.common.util.AuthTestSupport;
 import io.bastillion.common.util.AuthUtil;
 import io.bastillion.manage.db.AuthDB;
 import io.bastillion.manage.model.Auth;
-import io.bastillion.manage.util.EncryptionUtil;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,9 +21,9 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.sql.SQLException;
-import java.text.SimpleDateFormat;
-import java.util.Calendar;
 
+import static io.bastillion.common.util.AuthTestSupport.encryptedAttribute;
+import static io.bastillion.common.util.AuthTestSupport.timeoutString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,16 +55,6 @@ class AuthFilterTest {
 
     private final AuthFilter filter = new AuthFilter();
 
-    private static String encryptedAttribute(String plaintext) throws Exception {
-        return EncryptionUtil.encrypt(plaintext);
-    }
-
-    private static String timeoutString(int minutesFromNow) {
-        Calendar c = Calendar.getInstance();
-        c.add(Calendar.MINUTE, minutesFromNow);
-        return new SimpleDateFormat("MMddyyyyHHmmss").format(c.getTime());
-    }
-
     // Timeout is only stubbed by callers that expect AuthFilter to actually reach the
     // timeout check - AuthDB.isAuthorized returning null/throwing short-circuits before that
     // point, and Mockito's strict stubs flag an unread stub as an error.
@@ -90,7 +80,7 @@ class AuthFilterTest {
     void validManagerTokenContinuesChainRegardlessOfPath() throws Exception {
         givenAuthenticatedSession("token123", 5L);
         when(session.getAttribute(AuthUtil.TIMEOUT)).thenReturn(timeoutString(10));
-        when(request.getRequestURI()).thenReturn("/manage/systems");
+        when(request.getServletPath()).thenReturn("/manage/systems");
 
         try (MockedStatic<AuthDB> authDB = mockStatic(AuthDB.class)) {
             authDB.when(() -> AuthDB.isAuthorized(5L, "token123")).thenReturn(Auth.MANAGER);
@@ -106,7 +96,7 @@ class AuthFilterTest {
     void administratorIsBlockedFromManagePaths() throws Exception {
         givenAuthenticatedSession("token123", 5L);
         when(session.getAttribute(AuthUtil.TIMEOUT)).thenReturn(timeoutString(10));
-        when(request.getRequestURI()).thenReturn("/manage/systems");
+        when(request.getServletPath()).thenReturn("/manage/systems");
         when(request.getContextPath()).thenReturn("");
 
         try (MockedStatic<AuthDB> authDB = mockStatic(AuthDB.class)) {
@@ -123,7 +113,7 @@ class AuthFilterTest {
     void administratorCanReachNonManagePaths() throws Exception {
         givenAuthenticatedSession("token123", 5L);
         when(session.getAttribute(AuthUtil.TIMEOUT)).thenReturn(timeoutString(10));
-        when(request.getRequestURI()).thenReturn("/dashboard");
+        when(request.getServletPath()).thenReturn("/dashboard");
 
         try (MockedStatic<AuthDB> authDB = mockStatic(AuthDB.class)) {
             authDB.when(() -> AuthDB.isAuthorized(5L, "token123")).thenReturn(Auth.ADMINISTRATOR);
@@ -139,7 +129,7 @@ class AuthFilterTest {
     void expiredSessionRedirectsDespiteAnOtherwiseValidToken() throws Exception {
         givenAuthenticatedSession("token123", 5L);
         when(session.getAttribute(AuthUtil.TIMEOUT)).thenReturn(timeoutString(-10));
-        when(request.getRequestURI()).thenReturn("/dashboard");
+        when(request.getServletPath()).thenReturn("/dashboard");
         when(request.getContextPath()).thenReturn("");
 
         try (MockedStatic<AuthDB> authDB = mockStatic(AuthDB.class)) {
