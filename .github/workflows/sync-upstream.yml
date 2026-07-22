@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write   # required for createWorkflowDispatch (trigger image build after merge)
 
 jobs:
   sync:
