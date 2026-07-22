@@ -11,8 +11,10 @@ LABEL org.opencontainers.image.licenses="Prosperity-3.0.0"
 # openssh-client: SSHUtil shells out to ssh-keygen to passphrase-encrypt generated
 # ed25519 keys — without it, keys are silently written unencrypted.
 # curl: used by container healthchecks.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssh-client curl \
+# Acquire::Retries + timeouts: the Ubuntu apt mirrors intermittently time out on
+# CI runners, which was failing the build outright; retry transient fetch errors.
+RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update \
+    && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y --no-install-recommends openssh-client curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 999 bastillion \
