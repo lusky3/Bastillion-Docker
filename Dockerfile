@@ -13,6 +13,10 @@ LABEL org.opencontainers.image.licenses="Prosperity-3.0.0"
 # curl: used by container healthchecks.
 # Acquire::Retries + timeouts: the Ubuntu apt mirrors intermittently time out on
 # CI runners, which was failing the build outright; retry transient fetch errors.
+# DL3008 (pin apt versions) is intentionally ignored: pinned Debian point-releases
+# get garbage-collected from the mirror, which breaks rebuilds — the opposite of
+# the reliability this line is here to provide.
+# hadolint ignore=DL3008
 RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update \
     && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y --no-install-recommends openssh-client curl \
     && rm -rf /var/lib/apt/lists/*
