@@ -133,3 +133,20 @@ jobs:
               pull_number: prNumber,
               merge_method: 'merge'
             });
+
+      - name: Trigger image build for the merged sync
+        # The merge above uses GITHUB_TOKEN, so its push does NOT trigger the
+        # `push`-based Build and Push Docker Image workflow (GitHub suppresses
+        # recursive GITHUB_TOKEN runs). Dispatch it explicitly so the published
+        # image actually picks up the synced upstream changes. workflow_dispatch
+        # is exempt from that suppression, so this run does fire.
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_commits == 'true' && steps.merge.outputs.has_conflicts == 'false'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'docker-image.yml',
+              ref: 'main',
+            });
