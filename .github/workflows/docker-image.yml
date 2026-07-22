@@ -7,6 +7,12 @@ on:
   pull_request:
     branches:
       - main
+  # Allow manual/programmatic runs. The Sync Upstream workflow dispatches this
+  # after it auto-merges: its merge uses GITHUB_TOKEN, whose pushes do NOT
+  # trigger `push` workflows, so without this the image would never rebuild on
+  # an upstream sync. workflow_dispatch is the documented exception that DOES
+  # run when triggered via GITHUB_TOKEN.
+  workflow_dispatch:
 
 permissions:
   contents: write
