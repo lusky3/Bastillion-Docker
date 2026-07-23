@@ -1,19 +1,19 @@
 version: 2
+# Only scope dependabot to FORK-OWNED dependencies. The Maven pom and the root
+# package.json track upstream (bastillion-io) verbatim, so their updates arrive
+# via the Sync Upstream workflow — not fork-side dependabot PRs, which drift from
+# upstream and fight the pristine-source design (e.g. #29 tried to push Jetty 12
+# ahead of upstream and broke the build).
 updates:
-- package-ecosystem: maven
-  directory: "/"
+# Fork's Playwright test harness (the root package.json is upstream's frontend build).
+- package-ecosystem: npm
+  directory: "/tests"
   schedule:
     interval: daily
   open-pull-requests-limit: 10
   automerge: true
 
-- package-ecosystem: npm
-  directory: "/"
-  schedule:
-    interval: daily
-  open-pull-requests-limit: 10
-  automerge: true
-  
+# Fork-owned CI workflows.
 - package-ecosystem: "github-actions"
   directory: "/"
   schedule:
