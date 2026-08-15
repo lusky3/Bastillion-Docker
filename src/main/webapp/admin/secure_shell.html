@@ -13,7 +13,7 @@
 
         $(document).ready(function () {
 
-            $.ajaxSetup({cache: false, async:false});
+            $.ajaxSetup({cache: false});
 
             //get instance id list from selected terminals
             function getActiveTermsInstanceIds() {
@@ -131,6 +131,41 @@
                 });
             }
 
+            function getSelectedTerminalText() {
+                if (selectionTermId && termMap[selectionTermId]
+                    && termMap[selectionTermId].hasSelection()) {
+                    return termMap[selectionTermId].getSelection();
+                }
+
+                var ids = Object.keys(termMap || {});
+                for (var i = 0; i < ids.length; i++) {
+                    if (termMap[ids[i]].hasSelection()) {
+                        selectionTermId = ids[i];
+                        return termMap[ids[i]].getSelection();
+                    }
+                }
+                return '';
+            }
+
+            function sendToActiveTerminals(message) {
+                var ids = getActiveTermsInstanceIds();
+                if (!ids.length || !connection || connection.readyState !== WebSocket.OPEN) {
+                    return false;
+                }
+
+                message.id = ids;
+                connection.send(JSON.stringify(message));
+                return true;
+            }
+
+            function isFormEntryTarget(target) {
+                var entry = $(target);
+                if (entry.is('#dummy')) {
+                    return false;
+                }
+                return entry.is('input, textarea, select, [contenteditable="true"]');
+            }
+
             var termFocus = true;
             $(document).keypress(function (e) {
                 if (termFocus) {
@@ -139,7 +174,7 @@
                     if (String.fromCharCode(keyCode) && String.fromCharCode(keyCode) !== ''
                         && (!e.ctrlKey || e.altKey) && !e.metaKey && !isNavKeyDown()) {
                         var cmdStr = String.fromCharCode(keyCode);
-                        connection.send(JSON.stringify({id: getActiveTermsInstanceIds(), command: cmdStr}));
+                        sendToActiveTerminals({command: cmdStr});
                     }
 
                 }
@@ -150,8 +185,22 @@
                     var keyCode = (e.keyCode) ? e.keyCode : e.charCode;
                     keys[keyCode] = true;
 
+                    var copyShortcut = !e.altKey && keyCode === 67 && (e.ctrlKey || e.metaKey);
+                    if (copyShortcut && getSelectedTerminalText()) {
+                        // Let the copy event put xterm's selection on the clipboard.
+                        return;
+                    }
+
+                    if (e.ctrlKey && !e.altKey && !e.metaKey && keyCode === 67) {
+                        // No selection: Ctrl+C remains the terminal interrupt character.
+                        sendToActiveTerminals({keyCode: keyCode});
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        return;
+                    }
+
                     if ((e.ctrlKey && !e.altKey) || NAV_KEY_CODES.indexOf(keyCode) !== -1) {
-                        connection.send(JSON.stringify({id: getActiveTermsInstanceIds(), keyCode: keyCode}));
+                        sendToActiveTerminals({keyCode: keyCode});
                     }
 
                     //prevent default for unix ctrl commands
@@ -173,25 +222,50 @@
             });
 
             $(document).click(function (e) {
-                if (termFocus && !$('body').hasClass('modal-open')) {
+                if (termFocus && !$('body').hasClass('modal-open')
+                    && !$(e.target).closest('.xterm').length) {
                     $('#dummy').focus();
                 }
             });
 
 
-            //get cmd text from paste
-            $(this).bind('paste', function (e) {
-                $('#dummy').focus();
-                $('#dummy').val('');
-                setTimeout(function () {
-                    var cmdStr = $('#dummy').val();
-                    connection.send(JSON.stringify({id: getActiveTermsInstanceIds(), command: cmdStr}));
-                }, 100);
+            $(document).on('copy', function (e) {
+                var selectedText = getSelectedTerminalText();
+                var clipboard = e.originalEvent && e.originalEvent.clipboardData;
+                if (!selectedText || !clipboard) {
+                    return;
+                }
+
+                clipboard.setData('text/plain', selectedText);
+                e.preventDefault();
+                if (selectionTermId && termMap[selectionTermId]) {
+                    termMap[selectionTermId].clearSelection();
+                }
+                selectionTermId = null;
+                termFocus = true;
             });
 
+            $(document).on('paste', function (e) {
+                if ($('body').hasClass('modal-open') || isFormEntryTarget(e.target)
+                    || $(e.target).closest('.xterm').length) {
+                    return;
+                }
+
+                var clipboard = e.originalEvent && e.originalEvent.clipboardData;
+                var pastedText = clipboard ? clipboard.getData('text/plain') : '';
+                if (!pastedText || !sendToActiveTerminals({command: pastedText})) {
+                    return;
+                }
+
+                e.preventDefault();
+                termFocus = true;
+                $('#dummy').focus();
+            });
 
             var termMap = {};
             var fitMap = {};
+            var selectionTermId = null;
+            var focusedTermId = null;
 
 
             $("#reset_size").click(function () {
@@ -199,14 +273,23 @@
             });
 
             function resetSize() {
-                var ids = getActiveTermsInstanceIds();
+                var ids = [];
+                $(".run_cmd").each(function () {
+                    ids.push($(this).attr("id").replace("run_cmd_", ""));
+                });
                 for (var i = 0; i < ids.length; i++) {
-                    var w = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-                    $("#output_" + ids[i]).width((w - 125)/2);
-                    $("#output_" + ids[i]).height(346 + y_offset);
-                    resize($("#output_" + ids[i]));
+                    var output = $("#output_" + ids[i]);
+                    output.css("width", "auto");
+                    output.height(346 + y_offset);
+                    resize(output);
                 }
             }
+
+            var windowResizeTimer;
+            $(window).on('resize', function () {
+                clearTimeout(windowResizeTimer);
+                windowResizeTimer = setTimeout(resetSize, 120);
+            });
 
             //resize element during drag event. Makes call to set pty width and height
             function resize(element) {
@@ -216,11 +299,20 @@
                     var width = Math.floor($('#output_' + id).innerWidth() - 20);
                     var height = Math.floor($('#output_' + id).innerHeight() - y_offset);
 
+                    // Fit first, then give the remote PTY xterm's exact character grid.
+                    // Estimating columns from pixels causes wrapping disagreements that
+                    // make zsh display its inverse-video PROMPT_EOL_MARK (usually "%").
+                    fitMap[id].fit();
+
                     $.ajax({
-                        url: '../admin/setPtyType.ktrl?id=' + id + '&userSettings.ptyWidth=' + width + '&userSettings.ptyHeight=' + height + '&_csrf=' + [[${session._csrf}]],
+                        url: '../admin/setPtyType.ktrl?id=' + id
+                            + '&userSettings.ptyColumns=' + termMap[id].cols
+                            + '&userSettings.ptyRows=' + termMap[id].rows
+                            + '&userSettings.ptyWidth=' + width
+                            + '&userSettings.ptyHeight=' + height
+                            + '&_csrf=' + [[${session._csrf}]],
                         cache: false
                     });
-                    fitMap[id].fit();
                 }
 
             }
@@ -276,11 +368,11 @@
                     {
                     [# th:if= "${userSettings != null && userSettings.bg != null}"]
                         background: [[${userSettings.bg}]],
+                        cursorAccent: [[${userSettings.bg}]],
                     [/]
-                    [# th:if= "${userSettings != null && userSettings.bg != null}"]
+                    [# th:if= "${userSettings != null && userSettings.fg != null}"]
                         foreground: [[${userSettings.fg}]],
                         cursor: [[${userSettings.fg}]],
-                        cursorAccent: [[${userSettings.fg}]],
                     [/]
                     [# th:if= "${userSettings !=null && userSettings.colors != null && userSettings.colors.length == 16}"]
                         black: [[${userSettings.colors[0]}]],
@@ -305,9 +397,9 @@
                 termMap[id] = new Terminal({
                     fontSize: 14,
                     'theme': CUSTOM_THEME,
-                    'cursorStyle' : 'bar',
-                    'cursorWidth' : '10',
-                    'cursorInactiveStyle' : 'bar',
+                    'cursorStyle' : 'block',
+                    'cursorBlink' : true,
+                    'cursorInactiveStyle' : 'outline',
                     fontFamily: 'DejaVu Sans Mono, Liberation Mono, monospace'
                 });
 
@@ -315,9 +407,46 @@
                 termMap[id].loadAddon(fitMap[id])
 
                 termMap[id].open($("#run_cmd_" + id).find('.output').get(0));
+                termMap[id].attachCustomKeyEventHandler(function (event) {
+                    var copyShortcut = event.type === 'keydown' && !event.altKey
+                        && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c';
+                    return !(copyShortcut && termMap[id].hasSelection());
+                });
+                termMap[id].onData(function (data) {
+                    sendToActiveTerminals({command: data});
+                });
+                $(termMap[id].textarea).on('focus', function () {
+                    focusedTermId = String(id);
+                });
+                termMap[id].onSelectionChange(function () {
+                    if (termMap[id].hasSelection()) {
+                        selectionTermId = String(id);
+                        termFocus = false;
+                    }
+                });
 
-
-                termMap[id].write(output);
+                // The remote shell starts before the browser can report its exact grid.
+                // On that first paint only, zsh may have already emitted its default
+                // standout PROMPT_EOL_MARK. Remove that exact control sequence when it is
+                // followed by zsh's line-padding carriage return; ordinary percent signs
+                // and genuine partial-line markers later in the session are untouched.
+                var initialZshEolMark = /\x1b\[1m\x1b\[7m%\x1b\[27m(?:\x1b\[1m)?\x1b\[0m(?= +\r)/;
+                var blinkingBlockCursor = '\x1b[1 q';
+                termMap[id].write(output.replace(initialZshEolMark, '') + blinkingBlockCursor, function () {
+                    // xterm does not initialize its cursor until the first focus or key
+                    // event. Prime it after the prompt is parsed. Keep the first pane
+                    // focused and restore the user's current pane as others initialize.
+                    var previousFocusedTermId = focusedTermId;
+                    termMap[id].focus();
+                    termMap[id].refresh(0, termMap[id].rows - 1);
+                    if (previousFocusedTermId === null) {
+                        focusedTermId = String(id);
+                    } else if (previousFocusedTermId !== String(id)
+                        && termMap[previousFocusedTermId]) {
+                        termMap[id].blur();
+                        termMap[previousFocusedTermId].focus();
+                    }
+                });
 
 
             }
@@ -339,24 +468,19 @@
                     }
                 });
 
-                //set focus to term
-                $(".output").mouseup(function (e) {
-                    if (window.getSelection().toString()) {
+                var id = element.attr("id").replace("run_cmd_", "");
+                element.find(".output").on('mouseup', function () {
+                    var terminal = termMap[id];
+                    if (terminal && terminal.hasSelection()) {
+                        selectionTermId = id;
                         termFocus = false;
                     } else {
                         termFocus = true;
                     }
                 });
 
-                $(".output").bind('copy', function () {
-                    setTimeout(function () {
-                        termFocus = true;
-                        window.getSelection().removeAllRanges();
-                    }, 100);
-                });
-
                 //set resizable
-                $(".output").resizable({
+                element.find(".output").resizable({
                     ghost: true,
                     stop: function (event, ui) {
                         resize($(this));
@@ -446,10 +570,36 @@
     </script>
 
     <style>
-        .term-container {
+        .live-term-container {
+            width: calc(100% - 32px);
+            max-width: none;
+            padding: 10px 0 32px;
+            margin: 0 auto;
+        }
+        .live-term-container .termwrapper {
+            display: grid;
             width: 100%;
-            padding: 10px 0;
             margin: 0;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+            align-items: start;
+        }
+        .live-term-container .run_cmd {
+            width: auto;
+            min-width: 0;
+            margin: 0;
+            float: none;
+        }
+        .live-term-container .output {
+            width: auto;
+        }
+        @media (max-width: 900px) {
+            .live-term-container {
+                width: calc(100% - 20px);
+            }
+            .live-term-container .termwrapper {
+                grid-template-columns: minmax(0, 1fr);
+            }
         }
         .term {
             background: [[${userSettings.bg}]];
@@ -461,14 +611,12 @@
 <body>
 <template th:if="${(systemList != null && !systemList.empty) || pendingSystemStatus.id != null }"
           th:remove="tag">
-    <div class="navbar navbar-dark bg-dark fixed-top navbar-expand" role="navigation">
+    <div class="navbar navbar-dark fixed-top navbar-expand" role="navigation">
         <div class="container">
             <div class="navbar-brand">
-                <div class="nav-img">
-                    <img src="/img/bastillion_40x40.png" th:src="@{/img/bastillion_40x40.png}"
-                         alt="bastillion">
-                </div>
-                Bastillion
+                <img class="brand-logo" src="/img/bastillion-logo.svg" th:src="@{/img/bastillion-logo.svg}"
+                     alt="Bastillion">
+                <span>Bastillion</span>
             </div>
             <div class="navbar-collapse" id="navbarCollapse">
                 <template th:if="${pendingSystemStatus == null || pendingSystemStatus.id == null}"
@@ -485,17 +633,17 @@
                                 class="caret"></b></a>
                             <ul
                                     class="dropdown-menu">
-                                <li class="dropdown-item"><a id="upload_push" href="#">Upload &amp; Push</a>
+                                <li><a id="upload_push" class="dropdown-item" href="#">Upload &amp; Push</a>
                                 </li>
-                                <li class="dropdown-item"><a id="connect_to_host" data-bs-toggle="modal"
+                                <li><a id="connect_to_host" class="dropdown-item" data-bs-toggle="modal"
                                                              data-bs-target="#connect_to_host_dialog"
                                                              href="#">Connect to Host</a>
                                 </li>
-                                <li class="dropdown-item"><a id="dup_session" href="#">Duplicate Session</a>
+                                <li><a id="dup_session" class="dropdown-item" href="#">Duplicate Session</a>
                                 </li>
-                                <li class="dropdown-item"><a id="reset_size" href="#">Reset Size</a>
+                                <li><a id="reset_size" class="dropdown-item" href="#">Reset Size</a>
                                 </li>
-                                <li class="dropdown-item"><a id="disconnect" href="#">Disconnect</a>
+                                <li><a id="disconnect" class="dropdown-item" href="#">Disconnect</a>
                                 </li>
                             </ul>
                         </li>
@@ -515,7 +663,7 @@
             <!--/.nav-collapse -->
         </div>
     </div>
-    <div class="term-container container">
+    <div class="term-container live-term-container container">
         <div class="termwrapper"></div>
     </div>
 </template>
@@ -649,14 +797,14 @@
     </div>
 </div>
 <div id="upload_push_dialog" class="modal fade">
-    <div class="modal-dialog">
-        <div class="modal-content" style="width:700px">
+    <div class="modal-dialog modal-dialog-centered upload-push-dialog">
+        <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Upload &amp; Push</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body">
-                <iframe id="upload_push_frame" width="675px" height="300px" style="border: none;"></iframe>
+            <div class="modal-body upload-push-modal-body">
+                <iframe id="upload_push_frame" class="upload-push-frame" title="Upload and push files"></iframe>
             </div>
         </div>
     </div>
