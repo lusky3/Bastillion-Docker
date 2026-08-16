@@ -1,0 +1,167 @@
+/**
+ * Copyright (C) 2013 Loophole, LLC
+ * <p>
+ * Licensed under The Prosperity Public License 3.0.0
+ */
+package io.bastillion.common.saml;
+
+import com.onelogin.saml2.settings.Saml2Settings;
+import io.bastillion.common.util.AppConfig;
+import io.bastillion.manage.util.SamlAuthUtil;
+import org.junit.jupiter.api.Test;
+
+import java.net.URL;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.security.Signature;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * Covers the manual-trio (samlIdpEntityId/samlIdpSsoUrl/samlIdpCert) config path's
+ * property-to-Saml2Settings-key routing, the auto-generated SP key pair, and the signed
+ * SP-initiated redirect URL - the metadata-URL path (IdPMetadataParser.parseRemoteXML) is a
+ * live HTTP fetch and belongs in manual/integration verification against a real IdP instead.
+ * <p>
+ * The static block below forces SamlAuthUtil's static initializer - and with it,
+ * samlAuthEnabled, a `static final boolean` computed exactly once per JVM - to run now,
+ * while samlIdpSsoUrl/samlIdpMetadataUrl are still unset, before any @Test method in this
+ * class sets either property. Surefire runs this whole module's tests in one shared JVM, so
+ * without this, persisting a non-empty value for either property here could make
+ * SamlAuthUtilTest's "SAML is disabled" assumption false depending on class-load order. Once
+ * forced this early, samlAuthEnabled is permanently pinned to false regardless of what any
+ * test (in this class or run after it) does to those properties afterward.
+ */
+class SamlSettingsUtilTest {
+
+    static {
+        boolean ignored = SamlAuthUtil.samlAuthEnabled;
+    }
+
+    @Test
+    void spEntityIdOverrideWinsOverSamlBaseUrl() throws Exception {
+        AppConfig.updateProperty("samlBaseUrl", "https://bastillion.test");
+        AppConfig.updateProperty("samlSpEntityId", "https://bastillion.test/custom-entity-id");
+        AppConfig.updateProperty("samlIdpSsoUrl", "https://idp.test/sso");
+
+        Saml2Settings settings = SamlSettingsUtil.getSettings();
+
+        assertEquals("https://bastillion.test/custom-entity-id", settings.getSpEntityId());
+        //ACS URL is always the fixed path off samlBaseUrl regardless of the entity ID override
+        assertEquals(new URL("https://bastillion.test/saml/acs"), settings.getSpAssertionConsumerServiceUrl());
+    }
+
+    @Test
+    void manualIdpEntityIdAndSsoUrlAreRoutedIntoSettings() throws Exception {
+        // Regression test: an earlier refactor called SettingsBuilder.fromProperties() before
+        // this branch finished populating the Properties object, so fromProperties() silently
+        // snapshotted an incomplete one and getIdpSingleSignOnServiceUrl() came back null -
+        // caught by booting a real instance and inspecting the actual redirect, not by a unit
+        // test, because no prior test asserted on this specific property.
+        AppConfig.updateProperty("samlBaseUrl", "https://bastillion.test");
+        AppConfig.updateProperty("samlIdpEntityId", "https://idp.test/entity");
+        AppConfig.updateProperty("samlIdpSsoUrl", "https://idp.test/sso");
+
+        Saml2Settings settings = SamlSettingsUtil.getSettings();
+
+        assertEquals("https://idp.test/entity", settings.getIdpEntityId());
+        assertEquals(new URL("https://idp.test/sso"), settings.getIdpSingleSignOnServiceUrl());
+    }
+
+    @Test
+    void strictAndWantAssertionsSignedAreAlwaysOnRegardlessOfConfig() throws Exception {
+        // Hardcoded, not exposed as config - a toggle that could accidentally disable
+        // signature validation is a foot-gun with no legitimate use case here.
+        AppConfig.updateProperty("samlBaseUrl", "https://bastillion.test");
+        AppConfig.updateProperty("samlIdpSsoUrl", "https://idp.test/sso");
+
+        Saml2Settings settings = SamlSettingsUtil.getSettings();
+
+        assertTrue(settings.isStrict());
+        assertTrue(settings.getWantAssertionsSigned());
+    }
+
+    @Test
+    void wantAssertionsEncryptedDefaultsToFalseAndFollowsConfigWhenSet() throws Exception {
+        AppConfig.updateProperty("samlBaseUrl", "https://bastillion.test");
+        AppConfig.updateProperty("samlIdpSsoUrl", "https://idp.test/sso");
+        // no samlWantEncryptedAssertions set yet - must default off, since turning it on
+        // unconditionally would break any existing SAML deployment whose IdP isn't
+        // configured to encrypt assertions for Bastillion's SP certificate.
+        assertFalse(SamlSettingsUtil.getSettings().getWantAssertionsEncrypted());
+
+        AppConfig.updateProperty("samlWantEncryptedAssertions", "true");
+        assertTrue(SamlSettingsUtil.getSettings().getWantAssertionsEncrypted());
+    }
+
+    @Test
+    void spKeyPairIsAutoGeneratedAndSigningIsAlwaysOn() throws Exception {
+        AppConfig.updateProperty("samlBaseUrl", "https://bastillion.test");
+        AppConfig.updateProperty("samlIdpSsoUrl", "https://idp.test/sso");
+
+        Saml2Settings settings = SamlSettingsUtil.getSettings();
+
+        assertTrue(settings.getAuthnRequestsSigned());
+        assertNotNull(settings.getSPcert());
+        assertNotNull(settings.getSPkey());
+    }
+
+    @Test
+    void spKeyPairIsReusedAcrossCalls() throws Exception {
+        AppConfig.updateProperty("samlBaseUrl", "https://bastillion.test");
+        AppConfig.updateProperty("samlIdpSsoUrl", "https://idp.test/sso");
+
+        Saml2Settings first = SamlSettingsUtil.getSettings();
+        Saml2Settings second = SamlSettingsUtil.getSettings();
+
+        assertEquals(first.getSPcert(), second.getSPcert());
+    }
+
+    @Test
+    void buildLoginRedirectUrlProducesACryptographicallyValidSignature() throws Exception {
+        AppConfig.updateProperty("samlBaseUrl", "https://bastillion.test");
+        AppConfig.updateProperty("samlIdpSsoUrl", "https://idp.test/sso");
+        Saml2Settings settings = SamlSettingsUtil.getSettings();
+
+        String redirectUrl = SamlSettingsUtil.buildLoginRedirectUrl(settings);
+
+        assertTrue(redirectUrl.startsWith("https://idp.test/sso?"), redirectUrl);
+        String query = redirectUrl.substring(redirectUrl.indexOf('?') + 1);
+        Map<String, String> params = parseQuery(query);
+        assertTrue(params.containsKey("SAMLRequest"));
+        assertTrue(params.containsKey("SigAlg"));
+        assertTrue(params.containsKey("Signature"));
+
+        //the signed message is exactly "SAMLRequest=<urlencoded>&SigAlg=<urlencoded>" - same
+        //construction java-saml-core's own Auth.buildRequestSignature() uses - verified here
+        //against the SP's own public certificate to prove the signature is real, not just
+        //present, mirroring the openssl-based manual verification this was first caught with.
+        int sigAlgIndex = query.indexOf("&SigAlg=");
+        int signatureIndex = query.indexOf("&Signature=");
+        String signedMessage = query.substring(0, signatureIndex);
+        String signatureBase64 = URLDecoder.decode(query.substring(signatureIndex + "&Signature=".length()), StandardCharsets.UTF_8);
+
+        //SHA1withRSA matches Saml2Settings' hardcoded default signatureAlgorithm
+        //(Constants.RSA_SHA1) - not something this code sets, so not worth deriving
+        //dynamically from settings.getSignatureAlgorithm() for one test.
+        Signature verifier = Signature.getInstance("SHA1withRSA");
+        verifier.initVerify(settings.getSPcert().getPublicKey());
+        verifier.update(signedMessage.getBytes(StandardCharsets.UTF_8));
+        assertTrue(verifier.verify(java.util.Base64.getDecoder().decode(signatureBase64)),
+                "signature did not verify against the SP's own certificate");
+        assertTrue(sigAlgIndex < signatureIndex);
+    }
+
+    private static Map<String, String> parseQuery(String query) {
+        Map<String, String> params = new java.util.HashMap<>();
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            params.put(pair.substring(0, eq), pair.substring(eq + 1));
+        }
+        return params;
+    }
+}
