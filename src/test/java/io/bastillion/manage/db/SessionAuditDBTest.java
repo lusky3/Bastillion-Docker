@@ -76,6 +76,18 @@ class SessionAuditDBTest {
     }
 
     @Test
+    void normalizesZshDoubleCarriageReturnWithoutAddingBlankLines() throws Exception {
+        try (Connection con = DbTestSupport.newConnection()) {
+            Long sessionId = newSession(con);
+            insertRow(con, sessionId,
+                    "prompt % pwd\u001B[?2004l\r\r\n/Users/alice\r\n",
+                    1700000000000L);
+
+            assertEquals("prompt % pwd\n/Users/alice\n", stream(con, sessionId));
+        }
+    }
+
+    @Test
     void onlyStreamsRowsForTheRequestedInstance() throws Exception {
         try (Connection con = DbTestSupport.newConnection()) {
             Long sessionId = newSession(con);
@@ -107,6 +119,19 @@ class SessionAuditDBTest {
             insertRow(con, sessionId, "[Klo\u0007 world\r\n", t + 1000);
 
             assertEquals("hello world\n", stream(con, sessionId));
+        }
+    }
+
+    @Test
+    void removesZshPromptEolMarkerLineWithoutLeavingAnExtraNewline() throws Exception {
+        try (Connection con = DbTestSupport.newConnection()) {
+            Long sessionId = newSession(con);
+            String marker = "\u001B[1m\u001B[7m%\u001B[27m\u001B[1m\u001B[0m\u001B[K";
+            insertRow(con, sessionId,
+                    "Last login: today\r\n" + marker + "\r\nprompt % pwd\r\n/Users/alice\r\n\r\nnext",
+                    1700000000000L);
+
+            assertEquals("Last login: today\nprompt % pwd\n/Users/alice\n\nnext\n", stream(con, sessionId));
         }
     }
 
@@ -171,5 +196,19 @@ class SessionAuditDBTest {
         assertEquals("before", SessionAuditDB.cleanLine("before\u001B]0;partial title"));
         // a stray escape char never lingers in the output
         assertEquals("ab", SessionAuditDB.cleanLine("a\u001Bb"));
+    }
+
+    @Test
+    void cleanLineRemovesZshPromptEolMarkButPreservesRealPercentSigns() {
+        String zshEolMark = "\u001B[1m\u001B[7m%\u001B[27m\u001B[1m\u001B[0m   ";
+        String zshEolMarkWithErase = "\u001B[1m\u001B[7m%\u001B[27m\u001B[1m\u001B[0m\u001B[K";
+        String styledZshEolMark = "\u001B[7m%\u001B[0m";
+
+        assertEquals("", SessionAuditDB.cleanLine(zshEolMark));
+        assertEquals("", SessionAuditDB.cleanLine(zshEolMarkWithErase));
+        assertEquals("", SessionAuditDB.cleanLine(styledZshEolMark));
+        assertEquals("%", SessionAuditDB.cleanLine("%"));
+        assertEquals("kavanagh@host ~ % pwd", SessionAuditDB.cleanLine("kavanagh@host ~ % pwd"));
+        assertEquals("100% complete", SessionAuditDB.cleanLine("100% complete"));
     }
 }
