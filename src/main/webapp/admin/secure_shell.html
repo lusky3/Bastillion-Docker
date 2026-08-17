@@ -28,13 +28,21 @@
 
             $('#upload_push_dialog').on('hidden.bs.modal', function () {
                 $("#upload_push_frame").attr("src", "");
+                $(this).removeClass('upload-form-state');
+            });
+
+            $('#upload_push_frame').on('load', function () {
+                var frameBody = this.contentDocument && this.contentDocument.body;
+                $('#upload_push_dialog').toggleClass('upload-form-state',
+                    frameBody != null && frameBody.classList.contains('upload-form-page'));
             });
 
             $(".termwrapper").sortable({
                 connectWith: ".run_cmd",
                 handle: ".term-header",
                 zIndex: 10000,
-                helper: 'clone'
+                helper: 'clone',
+                cancel: '.ui-resizable-handle'
             });
 
             //submit
@@ -93,6 +101,7 @@
                     idListStr = idListStr + '&idList=' + entry;
                 });
 
+                $('#upload_push_dialog').addClass('upload-form-state');
                 $("#upload_push_frame").attr("src", "setUpload.ktrl" + idListStr);
                 new bootstrap.Modal($("#upload_push_dialog")).show();
             });
@@ -264,6 +273,7 @@
 
             var termMap = {};
             var fitMap = {};
+            var ptyResizeRequests = {};
             var selectionTermId = null;
             var focusedTermId = null;
 
@@ -288,14 +298,23 @@
                 });
                 for (var i = 0; i < ids.length; i++) {
                     var output = $("#output_" + ids[i]);
-                    output.css("width", "auto");
+                    output.closest(".run_cmd").css({
+                        "width": "100%",
+                        "height": "auto"
+                    });
+                    output.css("width", "100%");
                     output.height(346 + y_offset);
                     resize(output);
                 }
             }
 
             var windowResizeTimer;
-            $(window).on('resize', function () {
+            $(window).on('resize', function (event) {
+                // jQuery UI's terminal-card resize event can bubble to window.
+                // Treat only a genuine browser viewport resize as a layout reset.
+                if (event.target !== window) {
+                    return;
+                }
                 clearTimeout(windowResizeTimer);
                 windowResizeTimer = setTimeout(resetSize, 120);
             });
@@ -305,22 +324,39 @@
                 var id = element.attr("id").replace("output_", "");
 
                 if (termMap[id]) {
-                    var width = Math.floor($('#output_' + id).innerWidth() - 20);
-                    var height = Math.floor($('#output_' + id).innerHeight() - y_offset);
-
                     // Fit first, then give the remote PTY xterm's exact character grid.
                     // Estimating columns from pixels causes wrapping disagreements that
                     // make zsh display its inverse-video PROMPT_EOL_MARK (usually "%").
                     fitMap[id].fit();
 
-                    $.ajax({
-                        url: '../admin/setPtyType.ktrl?id=' + id
-                            + '&userSettings.ptyColumns=' + termMap[id].cols
-                            + '&userSettings.ptyRows=' + termMap[id].rows
-                            + '&userSettings.ptyWidth=' + width
-                            + '&userSettings.ptyHeight=' + height
-                            + '&_csrf=' + [[${session._csrf}]],
+                    // Use the rendered screen rather than the card dimensions so the PTY
+                    // remains exact when terminal padding or chrome changes.
+                    var screen = termMap[id].element.querySelector('.xterm-screen');
+                    var bounds = screen ? screen.getBoundingClientRect() : null;
+                    var width = Math.max(1, Math.floor(bounds ? bounds.width : element.innerWidth()));
+                    var height = Math.max(1, Math.floor(bounds ? bounds.height : element.innerHeight()));
+
+                    if (ptyResizeRequests[id]) {
+                        ptyResizeRequests[id].abort();
+                    }
+                    var request = $.ajax({
+                        url: '../admin/setPtyType.ktrl',
+                        method: 'GET',
+                        data: {
+                            id: id,
+                            'userSettings.ptyColumns': termMap[id].cols,
+                            'userSettings.ptyRows': termMap[id].rows,
+                            'userSettings.ptyWidth': width,
+                            'userSettings.ptyHeight': height,
+                            _csrf: [[${session._csrf}]]
+                        },
                         cache: false
+                    });
+                    ptyResizeRequests[id] = request;
+                    request.always(function () {
+                        if (ptyResizeRequests[id] === request) {
+                            delete ptyResizeRequests[id];
+                        }
                     });
                 }
 
@@ -403,19 +439,30 @@
                     [/]
                     };
 
+                var terminalBackground = CUSTOM_THEME.background || '#070a0e';
+                var terminalForeground = CUSTOM_THEME.foreground || '#e6edf3';
+                var terminalCard = $("#run_cmd_" + id);
+                terminalCard.css({
+                    '--terminal-bg': terminalBackground,
+                    '--terminal-fg': terminalForeground
+                });
+                terminalCard.find('.term').css('background-color', terminalBackground);
+
                 termMap[id] = new Terminal({
                     fontSize: 14,
+                    lineHeight: 1.2,
+                    letterSpacing: 0,
                     'theme': CUSTOM_THEME,
                     'cursorStyle' : 'block',
                     'cursorBlink' : true,
                     'cursorInactiveStyle' : 'outline',
-                    fontFamily: 'DejaVu Sans Mono, Liberation Mono, monospace'
+                    fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace'
                 });
 
                 fitMap[id] = new FitAddon.FitAddon()
                 termMap[id].loadAddon(fitMap[id])
 
-                termMap[id].open($("#run_cmd_" + id).find('.output').get(0));
+                termMap[id].open($("#run_cmd_" + id).find('.terminal-viewport').get(0));
                 termMap[id].attachCustomKeyEventHandler(function (event) {
                     var copyShortcut = event.type === 'keydown' && !event.altKey
                         && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c';
@@ -459,6 +506,9 @@
 
                 //if terminal window toggle active for commands
                 element.mousedown(function (e) {
+                    if ($(e.target).hasClass("ui-resizable-handle")) {
+                        return;
+                    }
                     //check for cmd-click / ctr-click
                     if (!e.ctrlKey && !e.metaKey) {
                         $(".run_cmd").removeClass('run_cmd_active');
@@ -482,13 +532,52 @@
                     }
                 });
 
-                //set resizable
-                element.find(".output").resizable({
-                    ghost: true,
+                // Resize the complete terminal card. Resizing only .output lets
+                // jQuery UI restore the parent grid item to its stretched width when
+                // the drag ends, which makes the terminal appear to snap back.
+                var output = element.find(".output");
+                var terminalChromeHeight = element.outerHeight() - output.outerHeight();
+                element.resizable({
+                    ghost: false,
+                    handles: "e, s, se",
+                    minWidth: 320,
+                    minHeight: Math.max(180, terminalChromeHeight + 120),
+                    start: function () {
+                        element.addClass("term-resizing");
+                        terminalChromeHeight = element.outerHeight() - output.outerHeight();
+                    },
+                    resize: function (event, ui) {
+                        output.outerHeight(Math.max(120, ui.size.height - terminalChromeHeight));
+                    },
                     stop: function (event, ui) {
-                        resize($(this));
+                        output.outerHeight(Math.max(120, ui.size.height - terminalChromeHeight));
+                        element.css("height", "auto");
+                        element.removeClass("term-resizing");
+                        // Wait for the grid and xterm viewport to expose their final
+                        // dimensions, then fit xterm and send those exact rows/columns
+                        // to ChannelShell.setPtySize on the server.
+                        window.requestAnimationFrame(function () {
+                            resize(output);
+                        });
                     }
                 });
+
+                // jQuery UI normally infers the resize axis from mouseover. When
+                // moving quickly from the terminal into a handle, that axis can be
+                // stale (usually "s"), so a corner drag changes only the height.
+                // Capture the handle that was actually pressed before jQuery UI's
+                // bubbling mousedown handler starts the resize.
+                element.get(0).addEventListener("mousedown", function (event) {
+                    var handle = event.target.closest(".ui-resizable-handle");
+                    if (!handle) {
+                        return;
+                    }
+                    var axisMatch = handle.className.match(/ui-resizable-(se|sw|ne|nw|n|e|s|w)/);
+                    var instance = element.resizable("instance");
+                    if (axisMatch && instance) {
+                        instance.axis = axisMatch[1];
+                    }
+                }, true);
             }
 
             //returns div for newly created terminal element
@@ -497,7 +586,9 @@
                     "<div id=\"run_cmd_" + instanceId + "\" class=\"run_cmd_active run_cmd\">"
                     + "<h6 class=\"term-header\">" + displayLabel + "</h6>"
                     + "<div class=\"term\">"
-                    + "<div id=\"output_" + instanceId + "\" class=\"output\"></div>"
+                    + "<div id=\"output_" + instanceId + "\" class=\"output\">"
+                    + "<div class=\"terminal-viewport\"></div>"
+                    + "</div>"
                     + "</div>"
                     + "<div data-bs-hostId=\"" + hostId + "\" class=\"host\"></div>"
                     + "</div>";
@@ -602,25 +693,34 @@
         .live-term-container {
             width: calc(100% - 32px);
             max-width: none;
+            min-width: 0;
             padding: 10px 0 32px;
             margin: 0 auto;
+            overflow-x: hidden;
         }
         .live-term-container .termwrapper {
             display: grid;
             width: 100%;
+            max-width: 100%;
+            min-width: 0;
             margin: 0;
+            box-sizing: border-box;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 14px;
             align-items: start;
         }
         .live-term-container .run_cmd {
-            width: auto;
+            width: 100%;
+            max-width: 100%;
             min-width: 0;
             margin: 0;
             float: none;
+            justify-self: start;
+            box-sizing: border-box;
         }
         .live-term-container .output {
             width: auto;
+            max-width: 100%;
         }
         @media (max-width: 900px) {
             .live-term-container {

@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -52,6 +53,11 @@ public class SessionAuditDB {
                     + "|\\u0007"                                    //bell
                     + "|\\]0;|\\[\\d\\d;\\d\\dm|\\[\\dm"              //bare leftovers logged without the escape char
                     + "|\u001B");                                  //any stray escape char
+    // zsh paints this inverse-video percent sign when the previous output did not end
+    // with a newline. It is terminal chrome, not command output, and should not appear
+    // as a standalone "%" line in recorded audit sessions.
+    private static final Pattern ZSH_PROMPT_EOL_MARK_PATTERN = Pattern.compile(
+            "\u001B\\[1m\u001B\\[7m%\u001B\\[27m(?:\u001B\\[1m)?\u001B\\[0m");
     //upper bound on how much of a single line without newlines is buffered before it is forced out
     private static final int MAX_LINE_BUFFER = 1024 * 1024;
 
@@ -246,25 +252,25 @@ public class SessionAuditDB {
                     for (int i = 0; i < output.length(); i++) {
                         char c = output.charAt(i);
                         if (c == '\n') {
-                            if (line.length() > 0 && line.charAt(line.length() - 1) == '\r') {
+                            // zsh commonly submits a command as CR CR LF while bash uses
+                            // CR LF. Remove every trailing carriage return so the extra zsh
+                            // CR does not render as a blank line in the audit transcript.
+                            while (line.length() > 0 && line.charAt(line.length() - 1) == '\r') {
                                 line.setLength(line.length() - 1);
                             }
-                            writer.write(cleanLine(line.toString()));
-                            writer.write('\n');
+                            writeCleanedLine(writer, line.toString());
                             line.setLength(0);
                         } else {
                             line.append(c);
                             if (line.length() >= MAX_LINE_BUFFER) {
-                                writer.write(cleanLine(line.toString()));
-                                writer.write('\n');
+                                writeCleanedLine(writer, line.toString());
                                 line.setLength(0);
                             }
                         }
                     }
                 }
                 if (line.length() > 0) {
-                    writer.write(cleanLine(line.toString()));
-                    writer.write('\n');
+                    writeCleanedLine(writer, line.toString());
                 }
             }
         }
@@ -277,7 +283,40 @@ public class SessionAuditDB {
      * @return cleaned line
      */
     static String cleanLine(String line) {
-        String cleaned = TERMINAL_CONTROL_PATTERN.matcher(line).replaceAll("");
+        String cleaned = cleanAuditLine(line);
+        return cleaned == null ? "" : cleaned;
+    }
+
+    /**
+     * Writes a real terminal line, but drops zsh's visual end-of-line marker along
+     * with its newline. Returning an empty string from {@link #cleanLine(String)} is
+     * not enough here because genuine empty terminal lines must remain visible.
+     */
+    private static void writeCleanedLine(Writer writer, String line) throws IOException {
+        String cleaned = cleanAuditLine(line);
+        if (cleaned != null) {
+            writer.write(cleaned);
+            writer.write('\n');
+        }
+    }
+
+    /**
+     * @return cleaned terminal text, or {@code null} when the entire line is zsh's
+     * visual PROMPT_EOL_MARK and should not be included in an audit replay
+     */
+    private static String cleanAuditLine(String line) {
+        boolean containedTerminalStyling = line.indexOf('\u001B') >= 0;
+        Matcher zshEolMarkMatcher = ZSH_PROMPT_EOL_MARK_PATTERN.matcher(line);
+        boolean containedZshEolMark = zshEolMarkMatcher.find();
+        String withoutZshEolMark = zshEolMarkMatcher.replaceAll("");
+        String cleaned = TERMINAL_CONTROL_PATTERN.matcher(withoutZshEolMark).replaceAll("");
+        // zsh versions and prompt configurations can append additional cursor/erase
+        // sequences to PROMPT_EOL_MARK. If stripping those sequences leaves only the
+        // styled marker, discard it. A real, unstyled "%" output line is preserved.
+        if ((containedZshEolMark && cleaned.trim().isEmpty())
+                || (containedTerminalStyling && "%".equals(cleaned.trim()))) {
+            return null;
+        }
         if (cleaned.indexOf('\b') < 0) {
             return cleaned;
         }
