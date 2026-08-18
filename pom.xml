@@ -6,7 +6,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.bastillion</groupId>
     <artifactId>bastillion</artifactId>
-    <version>6.0.0-SNAPSHOT</version>
+    <version>5.2.0</version>
     <packaging>jar</packaging>
     <name>Bastillion</name>
 
@@ -65,7 +65,7 @@
             <dependency>
                 <groupId>org.apache.santuario</groupId>
                 <artifactId>xmlsec</artifactId>
-                <version>2.2.6</version>
+                <version>4.0.4</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -223,7 +223,7 @@
         <dependency>
             <groupId>jakarta.servlet</groupId>
             <artifactId>jakarta.servlet-api</artifactId>
-            <version>6.0.0</version>
+            <version>6.1.0</version>
         </dependency>
 
         <!-- SAML SSO -->
@@ -348,7 +348,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-clean-plugin</artifactId>
-                <version>3.4.1</version>
+                <version>3.5.0</version>
                 <executions>
                     <execution>
                         <id>clean-test-config</id>
