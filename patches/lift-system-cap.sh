@@ -32,14 +32,14 @@ if grep -q 'FREE_TIER_MAX_SYSTEMS = Integer.MAX_VALUE;' "$FILE"; then
   exit 0
 fi
 
-if ! grep -q 'FREE_TIER_MAX_SYSTEMS = 5;' "$FILE"; then
-  echo "lift-system-cap: ERROR: expected 'FREE_TIER_MAX_SYSTEMS = 5;' not found in" >&2
+if ! grep -qE 'FREE_TIER_MAX_SYSTEMS = [0-9]+;' "$FILE"; then
+  echo "lift-system-cap: ERROR: expected 'FREE_TIER_MAX_SYSTEMS = <int>;' not found in" >&2
   echo "  $FILE" >&2
   echo "  Upstream likely changed the license cap; review and update this patch." >&2
   exit 1
 fi
 
-sed -i 's/FREE_TIER_MAX_SYSTEMS = 5;/FREE_TIER_MAX_SYSTEMS = Integer.MAX_VALUE;/' "$FILE"
+sed -i -E 's/FREE_TIER_MAX_SYSTEMS = [0-9]+;/FREE_TIER_MAX_SYSTEMS = Integer.MAX_VALUE;/' "$FILE"
 
 # Confirm the substitution took effect.
 grep -q 'FREE_TIER_MAX_SYSTEMS = Integer.MAX_VALUE;' "$FILE" \
