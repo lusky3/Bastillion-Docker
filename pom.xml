@@ -6,7 +6,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.bastillion</groupId>
     <artifactId>bastillion</artifactId>
-    <version>5.2.0</version>
+    <version>5.2.1-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>Bastillion</name>
 
@@ -135,7 +135,7 @@
         <dependency>
             <groupId>com.github.mwiede</groupId>
             <artifactId>jsch</artifactId>
-            <version>2.28.6</version>
+            <version>2.28.7</version>
         </dependency>
         <!-- jsch needs BouncyCastle at runtime for Ed25519/Ed448 key generation
              (com.jcraft.jsch.bc.KeyPairGenEdDSA); not a transitive dependency of jsch
