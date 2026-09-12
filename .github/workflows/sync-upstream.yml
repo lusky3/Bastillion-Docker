@@ -9,6 +9,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: write   # required for createWorkflowDispatch (trigger image build after merge)
+  issues: write    # required to open the manual-merge-required issue on a genuine conflict
 
 jobs:
   sync:
@@ -59,10 +60,59 @@ jobs:
         id: merge
         run: |
           # Merge with strategy to keep our workflows
+          FORK_HEAD=$(git rev-parse HEAD)
+          MERGE_OK=0
           if git merge upstream/main --no-edit -X ours; then
-            # Restore our workflows (keep ours, not upstream's)
-            git checkout HEAD -- .github/workflows/
-            
+            MERGE_OK=1
+          else
+            # .github/workflows/ is fork-owned (see the post-merge checkout
+            # below) - but -X ours only resolves conflicts in files BOTH sides
+            # modified. A file we deleted that upstream still edits is a
+            # modify/delete conflict, which -X ours cannot touch, so the merge
+            # aborts every run. (This is exactly what silently broke the sync
+            # from 2026-08-26 to 2026-09-12: upstream kept editing
+            # .github/workflows/github-build.yml, which we intentionally
+            # removed early on.) Auto-resolve any conflict confined to
+            # .github/workflows/ by keeping our side, then finish the merge.
+            # Anything else is a genuine conflict and falls through to the
+            # manual-merge-required path below.
+            REAL_CONFLICT=0
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                .github/workflows/*)
+                  if git cat-file -e "$FORK_HEAD:$f" 2>/dev/null; then
+                    git checkout "$FORK_HEAD" -- "$f"
+                    git add "$f"
+                  else
+                    git rm -f -- "$f" >/dev/null
+                  fi
+                  ;;
+                *)
+                  REAL_CONFLICT=1
+                  ;;
+              esac
+            done <<< "$(git diff --name-only --diff-filter=U)"
+
+            if [ "$REAL_CONFLICT" -eq 0 ]; then
+              git commit --no-edit
+              MERGE_OK=1
+            else
+              git merge --abort
+            fi
+          fi
+
+          if [ "$MERGE_OK" -eq 1 ]; then
+            # Restore our workflows directory exactly as it was before this
+            # merge - including removing any workflow file upstream added that
+            # we never had. A plain 'checkout HEAD' would be a no-op here:
+            # by this point HEAD already IS the merge commit, so it just
+            # re-materializes what's already committed. --no-overlay against
+            # the saved pre-merge commit is what actually restores our state
+            # and deletes any newly-added path a plain overlay checkout would
+            # otherwise silently leave in place.
+            git checkout --no-overlay "$FORK_HEAD" -- .github/workflows/
+
             # Check if merge created any commits
             COMMITS_AHEAD=$(git rev-list --count origin/main..HEAD)
             if [ "$COMMITS_AHEAD" -gt 0 ]; then
@@ -80,9 +130,55 @@ jobs:
             echo "merge_status=conflict" >> $GITHUB_OUTPUT
             echo "has_conflicts=true" >> $GITHUB_OUTPUT
             echo "has_commits=false" >> $GITHUB_OUTPUT
-            git merge --abort
           fi
-      
+
+      - name: Open conflict issue if unresolved
+        # A genuine conflict (outside .github/workflows/) leaves has_commits
+        # false, so the Push/Create-PR steps below never run - previously that
+        # meant the failure was completely silent (no PR, no notification),
+        # which is how the sync going stale went unnoticed for weeks. Surface
+        # it instead. Dedupes on a fixed label so re-runs don't spam issues.
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_conflicts == 'true'
+        uses: actions/github-script@v9
+        env:
+          UPSTREAM_SHA: ${{ steps.check.outputs.upstream_sha }}
+          COMMITS_COUNT: ${{ steps.check.outputs.commits_count }}
+        with:
+          script: |
+            // The label must exist before it can be used to create or filter
+            // issues (POST /issues 422s on an unknown label). Create it if
+            // missing; ignore 422 if another run created it concurrently.
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'upstream-sync-conflict',
+                color: 'd73a4a',
+                description: 'Automated upstream sync could not merge cleanly',
+              });
+            } catch (e) {
+              if (e.status !== 422) throw e;
+            }
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-sync-conflict',
+            });
+            if (existing.data.length > 0) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Upstream sync blocked: manual merge required',
+              labels: ['upstream-sync-conflict'],
+              body: `The automated upstream sync could not merge cleanly and needs manual resolution.\n\n` +
+                `**Upstream commit:** ${process.env.UPSTREAM_SHA}\n` +
+                `**Commits pending:** ${process.env.COMMITS_COUNT}\n\n` +
+                `Locally: \`git fetch upstream main && git merge upstream/main -X ours\`, resolve the conflict, ` +
+                `then open a PR to \`main\`. Close this issue once resolved (it will reopen on the next conflicting run).`,
+            });
+
       - name: Push sync branch
         if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.has_commits == 'true'
         run: |
