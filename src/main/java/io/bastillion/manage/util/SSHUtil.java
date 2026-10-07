@@ -24,6 +24,7 @@ import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
@@ -34,12 +35,59 @@ public class SSHUtil {
     public static final String PRIVATE_KEY = "privateKey";
     public static final String PUBLIC_KEY = "publicKey";
     private static final Logger log = LoggerFactory.getLogger(SSHUtil.class);
-    public static final boolean keyManagementEnabled = "true".equals(AppConfig.getProperty("keyManagementEnabled"));
+    /**
+     * True when Bastillion distributes user public keys to hosts and owns their
+     * authorized_keys files - {@link KeyManagement.Mode#MANAGE}. Gates the refresh timer, the
+     * distribution loops below, and the "Manage SSH Keys" screens (referenced from the
+     * navigation and menu templates), all of which have nothing to do in the other modes.
+     * See {@link KeyManagement} for the full three-way setting.
+     */
+    public static final boolean keyManagementEnabled = KeyManagement.distributesUserKeys();
 
     public static final String KEY_PATH = AppConfig.CONFIG_DIR + "keydb";
     public static final String KEY_TYPE = AppConfig.getProperty("sshKeyType");
-    public static final int KEY_LENGTH = StringUtils.isNumeric(AppConfig.getProperty("sshKeyLength"))
-            ? Integer.parseInt(AppConfig.getProperty("sshKeyLength")) : 4096;
+    public static final int KEY_LENGTH = resolveKeyLength(KEY_TYPE, AppConfig.getProperty("sshKeyLength"));
+
+    /** Documented default for rsa when sshKeyLength does not give a usable one. */
+    static final int RSA_DEFAULT_LENGTH = 4096;
+    /** The only curve sizes ecdsa accepts. */
+    private static final Set<Integer> ECDSA_CURVE_SIZES = Set.of(256, 384, 521);
+
+    /**
+     * The key size to generate, given the configured type and length.
+     * <p>
+     * sshKeyLength ships as 256, which is a curve size for ecdsa and ignored by
+     * ed25519/ed448 - but it is not a usable RSA modulus, so sshKeyType=rsa on its own used to
+     * fail key generation outright and take the application down with it on first startup.
+     * Both the bundled config and the README already describe rsa as defaulting to 4096, so a
+     * length that cannot work for the chosen type falls back to the documented default for it
+     * rather than being passed through to fail. Substitutions are logged: quietly generating a
+     * key of a different size than asked for would be worse than the original crash.
+     */
+    static int resolveKeyLength(String keyType, String configuredLength) {
+        Integer requested = StringUtils.isNumeric(configuredLength)
+                ? Integer.valueOf(Integer.parseInt(configuredLength)) : null;
+        String type = StringUtils.trimToEmpty(keyType).toLowerCase();
+
+        if ("rsa".equals(type)) {
+            if (requested != null && requested >= 1024) {
+                return requested;
+            }
+            log.error("sshKeyLength={} cannot be used for an RSA key; generating {} bits instead. "
+                    + "Set sshKeyLength explicitly to choose.", configuredLength, RSA_DEFAULT_LENGTH);
+            return RSA_DEFAULT_LENGTH;
+        }
+        if ("ecdsa".equals(type)) {
+            if (requested != null && ECDSA_CURVE_SIZES.contains(requested)) {
+                return requested;
+            }
+            log.error("sshKeyLength={} is not an ECDSA curve size ({}); generating 256 instead.",
+                    configuredLength, ECDSA_CURVE_SIZES);
+            return 256;
+        }
+        // ed25519 and ed448 have one size each and ignore this value.
+        return requested != null ? requested : RSA_DEFAULT_LENGTH;
+    }
 
     public static final String DEFAULT_USER_KEY_TYPE = AppConfig.getProperty("defaultUserKeyType", "ed25519");
     public static final boolean ALLOW_USER_KEY_TYPE_SELECTION =
@@ -55,18 +103,26 @@ public class SSHUtil {
 
     private SSHUtil() {}
 
-    // --- Command Injection Guards ---
+    // --- authorized_keys Content Guards ---
 
-    // authorizedKeys is interpolated unquoted into remote shell commands (cat/echo/chmod),
-    // so it's restricted to a plain relative/absolute file path with no shell metacharacters.
+    // addPubKey reads and writes authorized_keys over SFTP, so neither of these values is
+    // ever handed to a remote shell and neither guard is load-bearing against command
+    // injection any more (see addPubKey). They are kept as input validation: a plain
+    // relative/absolute path, and key lines that cannot corrupt the file they are written
+    // into. Rejecting shell metacharacters is now purely defense-in-depth, in case a value
+    // ever reaches an unquoted shell context again.
     private static final Pattern SAFE_AUTHORIZED_KEYS_PATH = Pattern.compile("[A-Za-z0-9_./-]+");
 
-    // each key line is interpolated inside a single-quoted echo '...' remote shell command,
-    // so a bare single quote (which would close the quoting early) makes the line unsafe.
-    // The other shell metacharacters have no special meaning inside single quotes in POSIX
-    // shells, but are rejected too as defense-in-depth in case a line ever reaches an
-    // unquoted context.
-    private static final Pattern UNSAFE_KEY_CHARS = Pattern.compile("['\"`$;|&\\r]");
+    // A CR or LF inside a single key line would split it into two authorized_keys entries,
+    // letting a crafted key comment append an entry of its own with its own options (command=,
+    // from=). That is the whole risk now: the file is written over SFTP, so no shell ever sees
+    // these bytes.
+    //
+    // This deliberately no longer rejects shell metacharacters. It used to, from when each key
+    // was interpolated into echo '...', and the cost was silent: an apostrophe is ordinary in a
+    // key comment ("alice's laptop"), and such a key was dropped from authorized_keys with only
+    // a line in the server log - the user simply found they had no access.
+    private static final Pattern UNSAFE_KEY_CHARS = Pattern.compile("[\\r\\n]");
 
     // package-private (rather than private) so SSHUtilTest can exercise the guards directly
     static boolean isSafeAuthorizedKeysPath(String path) {
@@ -204,6 +260,13 @@ public class SSHUtil {
     // ---- SSH key distribution methods ----
 
     public static HostSystem addPubKey(HostSystem hostSystem, Session session, String appPublicKey) {
+        if (!KeyManagement.writesAuthorizedKeys()) {
+            // keyManagement=off: the host's authorized_keys is not ours to touch. Reaching
+            // here at all means authentication already succeeded by some other means, which
+            // in practice is an SSH certificate - so there is nothing to add and nothing to
+            // reconcile. Status is left as the caller set it.
+            return hostSystem;
+        }
         try {
             String authorizedKeys = hostSystem.getAuthorizedKeys().replaceAll("~\\/|~", "");
             if (!isSafeAuthorizedKeysPath(authorizedKeys)) {
@@ -213,22 +276,7 @@ public class SSHUtil {
                 return hostSystem;
             }
 
-            ChannelExec exec = (ChannelExec) session.openChannel("exec");
-            exec.setCommand("cat " + authorizedKeys);
-            exec.setErrStream(System.err);
-            exec.setInputStream(null);
-            InputStream in = exec.getInputStream();
-            exec.connect(CHANNEL_TIMEOUT);
-
-            BufferedReader reader = new BufferedReader(new InputStreamReader(in));
-            StringBuilder existingKeysBuilder = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null)
-                existingKeysBuilder.append(line).append("\n");
-            reader.close();
-            exec.disconnect();
-
-            String existingKeys = existingKeysBuilder.toString();
+            String existingKeys = readAuthorizedKeys(session, authorizedKeys);
             String appPubKey = appPublicKey.replace("\n", "").trim();
             if (!isSafeKeyContent(appPubKey)) {
                 log.error("Refusing to push keys for system {}: application public key contains disallowed characters",
@@ -249,24 +297,135 @@ public class SSHUtil {
                     }
                     sb.append(key).append("\n");
                 }
-                sb.append(appPubKey);
+                sb.append(appPubKey).append("\n");
                 newKeys = sb.toString();
             } else {
+                // Key management off: leave whatever is already on the host alone and just
+                // make sure Bastillion's own key is present. existingKeys is host-controlled
+                // content that is written straight back out, which is safe only because
+                // writeAuthorizedKeys uses SFTP rather than a shell command.
                 if (!existingKeys.contains(appPubKey))
-                    newKeys = existingKeys + "\n" + appPubKey;
+                    newKeys = appendKeyLine(existingKeys, appPubKey);
                 else newKeys = existingKeys;
             }
 
             if (!newKeys.equals(existingKeys)) {
-                ChannelExec upd = (ChannelExec) session.openChannel("exec");
-                upd.setCommand("echo '" + newKeys + "' > " + authorizedKeys + "; chmod 600 " + authorizedKeys);
-                upd.connect(CHANNEL_TIMEOUT);
-                upd.disconnect();
+                writeAuthorizedKeys(session, authorizedKeys, newKeys);
             }
         } catch (Exception ex) {
             log.error(ex.toString(), ex);
         }
         return hostSystem;
+    }
+
+    /**
+     * Appends one key as a line of its own to existing authorized_keys content.
+     * <p>
+     * Every line, including the last, ends with a newline. OpenSSH reads a final line without
+     * one perfectly well, but anything that later appends to the file - another configuration
+     * tool, or an administrator running {@code echo key >> authorized_keys} - would run its
+     * entry onto the end of Bastillion's, silently invalidating both. Coexisting with whatever
+     * else manages the file is the entire point of keyManagement=append, so the file is left
+     * in a state that is safe to append to.
+     */
+    static String appendKeyLine(String existingKeys, String key) {
+        StringBuilder sb = new StringBuilder(existingKeys);
+        if (!existingKeys.isEmpty() && !existingKeys.endsWith("\n")) {
+            sb.append("\n");
+        }
+        return sb.append(key).append("\n").toString();
+    }
+
+    /**
+     * Reads the remote authorized_keys file over SFTP, returning "" if it does not exist yet.
+     * <p>
+     * Deliberately not {@code cat <path>} over an exec channel: the contents come back here
+     * and are written out again by {@link #writeAuthorizedKeys}, and routing them through a
+     * shell command line meant any quote already present in the file (an apostrophe in a key
+     * comment is perfectly legal) could terminate the quoting of the command that rewrote it.
+     * SFTP transfers the bytes with no shell on either end, so the file's existing contents
+     * need no escaping or validation at all.
+     */
+    private static String readAuthorizedKeys(Session session, String authorizedKeys) throws JSchException, SftpException, IOException {
+        ChannelSftp sftp = (ChannelSftp) session.openChannel("sftp");
+        try {
+            sftp.connect(CHANNEL_TIMEOUT);
+            try (InputStream in = sftp.get(authorizedKeys)) {
+                return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            } catch (SftpException ex) {
+                if (ex.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) {
+                    return "";
+                }
+                throw ex;
+            }
+        } finally {
+            sftp.disconnect();
+        }
+    }
+
+    /**
+     * Suffix for the file the new authorized_keys is staged in. Beside the real one, so the
+     * rename below stays within a single filesystem and can be atomic.
+     */
+    private static final String AUTHORIZED_KEYS_TMP_SUFFIX = ".bastillion-new";
+
+    /**
+     * Replaces the remote authorized_keys file over SFTP, via a staged write and a rename.
+     * <p>
+     * Writing straight over it would truncate first and stream after, so a connection lost
+     * part way leaves a half-written or empty file - and in keyManagement=manage that file is
+     * rewritten on every host by the refresh timer, unattended, every authKeysRefreshInterval
+     * minutes. Losing it takes the application key with it, which locks Bastillion and every
+     * user out of that host until somebody fixes it by hand. Staging and renaming means the
+     * host has either the old file or the new one.
+     */
+    private static void writeAuthorizedKeys(Session session, String authorizedKeys, String contents) throws JSchException, SftpException {
+        ChannelSftp sftp = (ChannelSftp) session.openChannel("sftp");
+        String staged = authorizedKeys + AUTHORIZED_KEYS_TMP_SUFFIX;
+        try {
+            sftp.connect(CHANNEL_TIMEOUT);
+            sftp.put(new ByteArrayInputStream(contents.getBytes(StandardCharsets.UTF_8)), staged);
+            sftp.chmod(0600, staged);
+
+            boolean renamed = false;
+            boolean originalRemoved = false;
+            try {
+                try {
+                    sftp.rename(staged, authorizedKeys);
+                    renamed = true;
+                } catch (SftpException ex) {
+                    // SFTP version 3 leaves renaming onto an existing path undefined and
+                    // servers without the posix-rename@openssh.com extension refuse it.
+                    // Removing first reopens a window where the file is missing, but a far
+                    // narrower one than streaming the whole file over the top of it.
+                    log.info("Atomic rename of {} not available, falling back to replace", authorizedKeys);
+                    sftp.rm(authorizedKeys);
+                    originalRemoved = true;
+                    sftp.rename(staged, authorizedKeys);
+                    renamed = true;
+                }
+            } finally {
+                // Only tidy the staged file away when doing so cannot destroy the last copy.
+                // Having removed the original and then failed to rename, the staged file is
+                // the only authorized_keys this host has - deleting it here would leave the
+                // host with none at all, which is the lockout this whole method exists to
+                // avoid. Leave it and say exactly where it is.
+                if (!renamed && originalRemoved) {
+                    log.error("Left the new authorized_keys at {} on this host: it could not be "
+                                    + "renamed into place and {} has already been removed, so that "
+                                    + "staged file is now the only copy. Move it into place to "
+                                    + "restore access.", staged, authorizedKeys);
+                } else if (!renamed) {
+                    try {
+                        sftp.rm(staged);
+                    } catch (Exception ignored) {
+                        // Best effort: the original is still intact either way.
+                    }
+                }
+            }
+        } finally {
+            sftp.disconnect();
+        }
     }
 
     public static HostSystem pushUpload(HostSystem hostSystem, Session session, String source, String destination) {
@@ -281,8 +440,7 @@ public class SSHUtil {
             c.put(file, destination);
         } catch (Exception ex) {
             log.info(ex.toString(), ex);
-            hostSystem.setErrorMsg(ex.getMessage());
-            hostSystem.setStatusCd(HostSystem.GENERIC_FAIL_STATUS);
+            recordFailure(hostSystem, ex);
         }
         if (c != null) c.exit();
         if (channel != null) channel.disconnect();
@@ -316,17 +474,19 @@ public class SSHUtil {
             if (StringUtils.isBlank(passphrase)) passphrase = appKey.getPassphrase();
             if (passphrase == null) passphrase = "";
 
-            jsch.addIdentity(appKey.getId().toString(),
-                    appKey.getPrivateKey().trim().getBytes(),
-                    appKey.getPublicKey().getBytes(),
-                    passphrase.getBytes());
+            String singleCredential = addApplicationIdentity(jsch, appKey, passphrase, hostSystem, usernameFor(userId));
 
             Session session = jsch.getSession(hostSystem.getUser(), hostSystem.getHost(), hostSystem.getPort());
             if (StringUtils.isNotBlank(password)) session.setPassword(password.getBytes(StandardCharsets.UTF_8));
-            session.setConfig("StrictHostKeyChecking", "no");
+            applyHostKeyVerification(jsch, session);
             session.setConfig("PreferredAuthentications", "publickey,keyboard-interactive,password");
             session.setServerAliveInterval(SERVER_ALIVE_INTERVAL);
+            AcceptedAuthMethodLogger authMethodLogger = new AcceptedAuthMethodLogger(session.getLogger());
+            session.setLogger(authMethodLogger);
             session.connect(SESSION_TIMEOUT);
+
+            recordAuthMethod(hostSystem, authMethodFor(singleCredential,
+                    authMethodLogger.acceptedMethod(), authMethodLogger.acceptedAlgorithm()));
 
             ChannelShell channel = (ChannelShell) session.openChannel("shell");
             channel.setPtyType("xterm");
@@ -347,8 +507,7 @@ public class SSHUtil {
             addPubKey(hostSystem, session, appKey.getPublicKey());
         } catch (Exception ex) {
             log.info(ex.toString(), ex);
-            hostSystem.setErrorMsg(ex.getMessage());
-            hostSystem.setStatusCd(HostSystem.GENERIC_FAIL_STATUS);
+            recordFailure(hostSystem, ex);
         }
 
         if (!hostSystem.getStatusCd().equals(HostSystem.SUCCESS_STATUS)) {
@@ -386,6 +545,260 @@ public class SSHUtil {
         }
     }
 
+    /**
+     * Points a session at Bastillion's own known_hosts ({@link HostKeyVerifier}) and turns on
+     * strict checking, so JSch aborts the handshake when verification refuses a key.
+     * <p>
+     * {@code StrictHostKeyChecking=no} - what both of these sessions used to set
+     * unconditionally - does not downgrade host key checking to a warning, it skips it: the
+     * key a managed system presents was never compared against anything. That is the one
+     * check standing between a bastion and handing the application private key, and on
+     * authentication fallback a user's password or key passphrase, to whatever happens to
+     * answer on that address.
+     */
+    private static void applyHostKeyVerification(JSch jsch, Session session) {
+        if (!HostKeyVerifier.isEnabled()) {
+            // Explicitly opted out via hostKeyVerification=off.
+            session.setConfig("StrictHostKeyChecking", "no");
+            return;
+        }
+        jsch.setHostKeyRepository(new HostKeyVerifier(jsch));
+        session.setConfig("StrictHostKeyChecking", "yes");
+    }
+
+    /**
+     * Registers the application key as the identity for this session, as a certificate when
+     * {@code sshCertificateAuth} is on and as a bare public key otherwise.
+     * <p>
+     * JSch needs no special call for the certificate case: its four-argument
+     * {@code addIdentity} inspects the bytes in the public key slot, and routes to its
+     * certificate-aware identity when it finds a certificate there rather than a plain key.
+     * The private key is the same either way - a certificate attests to a key, it does not
+     * replace one.
+     * <p>
+     * With certificates on, the plain key is offered as well, as a second identity behind the
+     * certificate. Offering only the certificate meant that turning sshCertificateAuth on cut
+     * off every host that had not had TrustedUserCAKeys configured yet - including hosts with
+     * the application key already sitting in their authorized_keys, which authenticated
+     * perfectly well the moment before. That strands an operator: the refresh timer is how
+     * Bastillion reaches a host to manage it, so the connection needed to roll the CA out is
+     * the one that breaks first. Offering both makes the rollout incremental - a host takes
+     * the certificate once it trusts the CA, and keeps working on its key until then - and
+     * grants no trust that was not already there, the key being in authorized_keys already.
+     * <p>
+     * Returns the credential to attribute a publickey success to when only one was offered,
+     * and null when both were, in which case nothing but the accepted algorithm can tell them
+     * apart (see {@link #authMethodFor}).
+     */
+    private static String addApplicationIdentity(JSch jsch, ApplicationKey appKey, String passphrase,
+                                                 HostSystem hostSystem, String username) throws JSchException {
+        String certificate = SshCertificateAuth.certificateFor(hostSystem, username);
+        byte[] privateKey = appKey.getPrivateKey().trim().getBytes();
+
+        if (certificate != null) {
+            // Added first, so JSch offers it first and a host that trusts the CA never falls
+            // back to the key. JSch keys identities by public key blob rather than by name,
+            // so the certificate and the key it attests to are two distinct identities.
+            jsch.addIdentity(appKey.getId() + "-cert", privateKey,
+                    certificate.getBytes(StandardCharsets.UTF_8), passphrase.getBytes());
+        }
+        jsch.addIdentity(appKey.getId().toString(), privateKey,
+                appKey.getPublicKey().getBytes(), passphrase.getBytes());
+
+        return certificate != null ? null : HostSystem.AUTH_METHOD_KEY;
+    }
+
+    /**
+     * Captures the authentication method a session actually completed, by listening to JSch's
+     * own log.
+     * <p>
+     * JSch exposes no accessor for this, and it is not something Bastillion can infer: the
+     * method it offers first is not necessarily the one the host accepts, because
+     * PreferredAuthentications also offers keyboard-interactive and password behind
+     * publickey. Recording what was offered made the systems screen's Auth column misleading
+     * in the one situation an operator consults it - a certificate rollout, where the
+     * question is precisely whether the host took the certificate or quietly fell back.
+     * <p>
+     * JSch logs {@code "Authentication succeeded (<method>)."} at info once the method
+     * completes, so that line is the answer. It also logs {@code "<algorithm> auth success"}
+     * at debug, which is what distinguishes the certificate from the key it attests to when
+     * both are offered as publickey identities - the method name is "publickey" either way.
+     * Everything else is passed through to whatever logger was already in place, so attaching
+     * this costs no logging; it does mean JSch builds its debug messages for these sessions,
+     * which is a handful of strings per connection.
+     */
+    static final class AcceptedAuthMethodLogger implements com.jcraft.jsch.Logger {
+
+        private static final String METHOD_PREFIX = "Authentication succeeded (";
+        private static final String METHOD_SUFFIX = ").";
+        private static final String ALGORITHM_SUFFIX = " auth success";
+
+        private final com.jcraft.jsch.Logger delegate;
+        private volatile String acceptedMethod;
+        private volatile String acceptedAlgorithm;
+
+        AcceptedAuthMethodLogger(com.jcraft.jsch.Logger delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public boolean isEnabled(int level) {
+            // Info and debug have to read as enabled whatever the delegate thinks, or JSch
+            // skips building the two messages this class exists to read.
+            return level == INFO || level == DEBUG || (delegate != null && delegate.isEnabled(level));
+        }
+
+        @Override
+        public void log(int level, String message) {
+            capture(level, message);
+            if (delegate != null && delegate.isEnabled(level)) {
+                delegate.log(level, message);
+            }
+        }
+
+        @Override
+        public void log(int level, String message, Throwable cause) {
+            capture(level, message);
+            if (delegate != null && delegate.isEnabled(level)) {
+                delegate.log(level, message, cause);
+            }
+        }
+
+        private void capture(int level, String message) {
+            if (message == null) {
+                return;
+            }
+            if (level == INFO && message.startsWith(METHOD_PREFIX) && message.endsWith(METHOD_SUFFIX)) {
+                acceptedMethod = message.substring(METHOD_PREFIX.length(), message.length() - METHOD_SUFFIX.length());
+            } else if (level == DEBUG && message.endsWith(ALGORITHM_SUFFIX)) {
+                acceptedAlgorithm = message.substring(0, message.length() - ALGORITHM_SUFFIX.length()).trim();
+            }
+        }
+
+        /** The method JSch completed, or null if it never logged one. */
+        String acceptedMethod() {
+            return acceptedMethod;
+        }
+
+        /** The public key algorithm JSch signed with, or null if it never logged one. */
+        String acceptedAlgorithm() {
+            return acceptedAlgorithm;
+        }
+    }
+
+    /**
+     * Marks out the OpenSSH certificate algorithm names, which are the plain key algorithm
+     * with this infix - {@code ssh-ed25519-cert-v01@openssh.com} against
+     * {@code ssh-ed25519}. Matching the infix rather than listing the algorithms keeps this
+     * right for key types Bastillion does not sign certificates for today.
+     */
+    private static final String CERTIFICATE_ALGORITHM_INFIX = "-cert-v";
+
+    /**
+     * Resolves what to record in a system's Auth column from what JSch reports the host
+     * accepted.
+     * <p>
+     * A publickey success is attributed by the algorithm that signed it, because the
+     * certificate and the key it attests to are both offered as publickey identities and the
+     * method name is "publickey" for either. Only when a single credential was offered, and
+     * the algorithm went unreported, does {@code singleCredential} stand in for it.
+     * <p>
+     * A host that rejected the certificate and took a password must not be recorded as having
+     * taken the certificate, so the fallback methods are their own state. An unrecognized or
+     * missing method is left null rather than guessed at, which the systems screen renders as
+     * unknown.
+     */
+    static String authMethodFor(String singleCredential, String acceptedMethod, String acceptedAlgorithm) {
+        if (acceptedMethod == null) {
+            return null;
+        }
+        return switch (acceptedMethod) {
+            case "publickey" -> {
+                if (acceptedAlgorithm != null) {
+                    yield acceptedAlgorithm.contains(CERTIFICATE_ALGORITHM_INFIX)
+                            ? HostSystem.AUTH_METHOD_CERTIFICATE
+                            : HostSystem.AUTH_METHOD_KEY;
+                }
+                yield singleCredential;
+            }
+            case "password", "keyboard-interactive" -> HostSystem.AUTH_METHOD_PASSWORD;
+            default -> null;
+        };
+    }
+
+    /**
+     * Records how a connection that has just succeeded authenticated, for the systems screen.
+     * <p>
+     * Best effort: the session is already up, so failing to note how it got there must not
+     * fail the connection. A system being registered for the first time has no id yet and is
+     * recorded on its next connection instead.
+     */
+    private static void recordAuthMethod(HostSystem hostSystem, String authMethod) {
+        hostSystem.setLastAuthMethod(authMethod);
+        try {
+            SystemDB.updateAuthMethod(hostSystem.getId(), authMethod);
+        } catch (Exception ex) {
+            log.error("Could not record the authentication method for system {}", hostSystem.getId(), ex);
+        }
+    }
+
+    /**
+     * The Bastillion username behind a connection, for the certificate key id that the target
+     * host logs. Best effort: a connection still proceeds if the lookup fails, just without
+     * naming the user on the host side.
+     */
+    private static String usernameFor(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        try {
+            User user = UserDB.getUser(userId);
+            return user == null ? null : user.getUsername();
+        } catch (Exception ex) {
+            log.error("Could not read the username for user id {}", userId, ex);
+            return null;
+        }
+    }
+
+    /**
+     * True if this failure was the host key being refused rather than anything else.
+     * <p>
+     * JSch raises a {@link JSchHostKeyException} subclass for an unknown, changed or revoked
+     * host key, and for a host certificate signed by an untrusted CA - so the type tells us
+     * this without matching on message text. The cause chain is walked because the connect
+     * call wraps it.
+     */
+    private static final int MAX_CAUSE_DEPTH = 32;
+
+    private static boolean isHostKeyRejection(Throwable ex) {
+        // Bounded rather than guarded against self-reference: the JVM rejects an exception
+        // that causes itself, but a two-element cycle (a caused by b, b later given a as its
+        // cause) is constructible and would spin a naive walk forever. No real chain is
+        // anywhere near this deep.
+        Throwable t = ex;
+        for (int depth = 0; t != null && depth < MAX_CAUSE_DEPTH; depth++, t = t.getCause()) {
+            if (t instanceof JSchHostKeyException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Records a failure, singling out a refused host key so the systems list can say what
+     * actually happened and point at the screen that resolves it.
+     */
+    private static void recordFailure(HostSystem hostSystem, Exception ex) {
+        if (isHostKeyRejection(ex)) {
+            hostSystem.setErrorMsg("The host key presented by this system was refused. "
+                    + "Review it under Manage \u2192 Host Keys.");
+            hostSystem.setStatusCd(HostSystem.HOST_KEY_FAIL_STATUS);
+            return;
+        }
+        hostSystem.setErrorMsg(ex.getMessage());
+        hostSystem.setStatusCd(HostSystem.GENERIC_FAIL_STATUS);
+    }
+
     // --- Authentication and Add Key ---
     public static HostSystem authAndAddPubKey(HostSystem hostSystem, String passphrase, String password) {
         JSch jsch = new JSch();
@@ -396,24 +809,33 @@ public class SSHUtil {
             if (StringUtils.isBlank(passphrase)) passphrase = appKey.getPassphrase();
             if (passphrase == null) passphrase = "";
 
-            jsch.addIdentity(appKey.getId().toString(),
-                    appKey.getPrivateKey().trim().getBytes(),
-                    appKey.getPublicKey().getBytes(),
-                    passphrase.getBytes());
+            String singleCredential = addApplicationIdentity(jsch, appKey, passphrase, hostSystem, null);
 
             session = jsch.getSession(hostSystem.getUser(), hostSystem.getHost(), hostSystem.getPort());
             if (password != null && !password.isEmpty()) session.setPassword(password.getBytes(StandardCharsets.UTF_8));
-            session.setConfig("StrictHostKeyChecking", "no");
+            applyHostKeyVerification(jsch, session);
             session.setConfig("PreferredAuthentications", "publickey,keyboard-interactive,password");
             session.setServerAliveInterval(SERVER_ALIVE_INTERVAL);
+            AcceptedAuthMethodLogger authMethodLogger = new AcceptedAuthMethodLogger(session.getLogger());
+            session.setLogger(authMethodLogger);
             session.connect(SESSION_TIMEOUT);
+            recordAuthMethod(hostSystem, authMethodFor(singleCredential,
+                    authMethodLogger.acceptedMethod(), authMethodLogger.acceptedAlgorithm()));
 
             addPubKey(hostSystem, session, appKey.getPublicKey());
 
         } catch (Exception ex) {
             log.info(ex.toString(), ex);
+            if (isHostKeyRejection(ex)) {
+                recordFailure(hostSystem, ex);
+                if (session != null) session.disconnect();
+                return hostSystem;
+            }
             hostSystem.setErrorMsg(ex.getMessage());
-            String msg = ex.getMessage().toLowerCase();
+            // Null for a SocketTimeoutException, an InterruptedException, or any NPE raised
+            // without one - and this is the handler, so throwing here escapes the method
+            // entirely and turns a reportable failure into an HTTP 500.
+            String msg = StringUtils.trimToEmpty(ex.getMessage()).toLowerCase();
             if (msg.contains("userauth fail")) hostSystem.setStatusCd(HostSystem.PUBLIC_KEY_FAIL_STATUS);
             else if (msg.contains("auth fail") || msg.contains("auth cancel"))
                 hostSystem.setStatusCd(HostSystem.AUTH_FAIL_STATUS);
@@ -424,6 +846,100 @@ public class SSHUtil {
         }
         if (session != null) session.disconnect();
         return hostSystem;
+    }
+
+    /**
+     * Outcome of a certificate authentication test.
+     *
+     * @param ok      whether the host accepted a Bastillion-signed certificate
+     * @param message what to tell the operator, in terms of what to do next
+     */
+    public record CertificateTestResult(boolean ok, String message) {
+    }
+
+    /**
+     * Tries to authenticate to one system with a Bastillion-signed certificate and reports
+     * what happened, without changing that system's recorded status.
+     * <p>
+     * Exists because {@code sshCertificateAuth} is a single global switch: without this, the
+     * way to discover that a host was never given {@code TrustedUserCAKeys} is to turn
+     * certificates on everywhere and watch connections fail. This answers the question for one
+     * host first.
+     * <p>
+     * Deliberately issues a certificate regardless of whether the feature is switched on -
+     * testing before enabling is the entire point - and deliberately offers <em>only</em>
+     * publickey authentication. With keyboard-interactive or password left available, a host
+     * that rejected the certificate could still complete the connection by another route and
+     * the test would report success for a host that is not ready.
+     * <p>
+     * Does not touch authorized_keys and does not write the system's status. It is a real
+     * connection, so host key verification applies as usual: under accept-new an unseen host
+     * key is recorded by it, exactly as the first real connection would have.
+     */
+    public static CertificateTestResult testCertificateAuth(HostSystem hostSystem, String username) {
+        JSch jsch = new JSch();
+        Session session = null;
+        try {
+            ApplicationKey appKey = PrivateKeyDB.getApplicationKey();
+            if (appKey == null) {
+                return new CertificateTestResult(false, "No application SSH key has been generated yet.");
+            }
+            String unsupported = SshCertificateAuth.unsupportedKeyTypeReason(appKey.getPublicKey());
+            if (unsupported != null) {
+                return new CertificateTestResult(false, unsupported);
+            }
+            String certificate = SshCertificateAuth.issueCertificate(hostSystem, username);
+            if (certificate == null) {
+                return new CertificateTestResult(false,
+                        "Could not issue a certificate. Check that a certificate authority exists "
+                                + "and that this system has a login account set.");
+            }
+
+            String passphrase = appKey.getPassphrase() == null ? "" : appKey.getPassphrase();
+            jsch.addIdentity(appKey.getId().toString(),
+                    appKey.getPrivateKey().trim().getBytes(),
+                    certificate.getBytes(StandardCharsets.UTF_8),
+                    passphrase.getBytes());
+
+            session = jsch.getSession(hostSystem.getUser(), hostSystem.getHost(), hostSystem.getPort());
+            applyHostKeyVerification(jsch, session);
+            session.setConfig("PreferredAuthentications", "publickey");
+            session.connect(SESSION_TIMEOUT);
+
+            return new CertificateTestResult(true,
+                    hostSystem.getUser() + "@" + hostSystem.getHost() + ":" + hostSystem.getPort()
+                            + " accepted a Bastillion-signed certificate. This system is ready for "
+                            + "sshCertificateAuth=on.");
+
+        } catch (Exception ex) {
+            log.info("Certificate test failed for {}:{}", hostSystem.getHost(), hostSystem.getPort(), ex);
+            return new CertificateTestResult(false, explainCertificateTestFailure(ex));
+        } finally {
+            if (session != null) {
+                session.disconnect();
+            }
+        }
+    }
+
+    /**
+     * Turns a failed certificate test into something an operator can act on. The common case
+     * by far is the host never having been told to trust the authority.
+     */
+    private static String explainCertificateTestFailure(Exception ex) {
+        if (isHostKeyRejection(ex)) {
+            return "The host key was refused, so the certificate was never tried. "
+                    + "Resolve it under Manage \u2192 Host Keys and test again.";
+        }
+        String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
+        if (message.contains("auth fail") || message.contains("auth cancel")) {
+            return "The host refused the certificate. Check that its sshd_config has "
+                    + "TrustedUserCAKeys pointing at this Bastillion's certificate authority key "
+                    + "(Settings shows it), and that sshd has been reloaded since.";
+        }
+        if (message.contains("unknownhost")) {
+            return "DNS lookup failed for this host.";
+        }
+        return "Could not connect: " + (ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
     }
 
     // --- Fingerprint helper ---
@@ -595,6 +1111,26 @@ public class SSHUtil {
         return x509Encoded;
     }
 
+    /**
+     * ssh-keygen here is local and non-interactive and finishes in milliseconds. A process
+     * still alive after this has stopped to prompt for something, and will never be answered.
+     */
+    private static final long KEYGEN_TIMEOUT_SECONDS = 30;
+
+    private static final byte[] OPENSSH_KEY_MAGIC = "openssh-key-v1\0".getBytes(StandardCharsets.US_ASCII);
+    private static final String CIPHER_NONE = "none";
+
+    /**
+     * Re-encrypts a freshly generated OpenSSH private key under the user's passphrase, by
+     * handing it to ssh-keygen.
+     * <p>
+     * Every failure here has to be loud. This runs on the path that generates a key for a
+     * user to download ({@code AuthKeysKtrl.generateUserKey}), so the caller cannot tell a
+     * rewrapped key from the plaintext one it passed in by looking at it - and the user is
+     * told the result is protected by the passphrase they just chose. The previous version
+     * called {@code proc.waitFor()}, discarded the exit status and returned the file
+     * regardless, so any ssh-keygen failure returned the key still completely unencrypted.
+     */
     public static String rewrapWithOpenSSHKeygen(String userId, String pem, String passphrase)
             throws IOException, InterruptedException, GeneralSecurityException {
         Path tmp = Files.createTempFile("bastillion_key_" + userId + "_", ".key");
@@ -607,10 +1143,85 @@ public class SSHUtil {
                     "-N", passphrase, "-f", tmp.toString(), "-o", "-a", "16");
             pb.redirectErrorStream(true);
             Process proc = pb.start();
-            proc.waitFor();
-            return Files.readString(tmp, StandardCharsets.US_ASCII);
+
+            // Close the child's stdin straight away. It is a pipe this end never writes to,
+            // so had ssh-keygen decided to prompt - a wrong -P, a format it would rather ask
+            // about - it would have blocked on a read that nothing was ever going to satisfy.
+            // At EOF it fails and exits instead, which is what makes draining its output
+            // below safe to do on this thread.
+            proc.getOutputStream().close();
+
+            // Read the merged output before waiting, not after. redirectErrorStream was
+            // already set but nothing ever read the pipe, so output large enough to fill the
+            // buffer would have left ssh-keygen blocked writing and waitFor() blocked on
+            // ssh-keygen.
+            String output;
+            try (InputStream out = proc.getInputStream()) {
+                output = new String(out.readAllBytes(), StandardCharsets.UTF_8).trim();
+            }
+
+            if (!proc.waitFor(KEYGEN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                proc.destroyForcibly();
+                throw new GeneralSecurityException("ssh-keygen did not finish within "
+                        + KEYGEN_TIMEOUT_SECONDS + "s while applying a passphrase to the generated key");
+            }
+            if (proc.exitValue() != 0) {
+                throw new GeneralSecurityException("ssh-keygen failed (exit " + proc.exitValue()
+                        + ") while applying a passphrase to the generated key"
+                        + (output.isEmpty() ? "" : ": " + output));
+            }
+
+            String rewrapped = Files.readString(tmp, StandardCharsets.US_ASCII);
+            // Check the property the user is relying on, rather than trusting the exit status
+            // to imply it. This is the last point at which an unencrypted key can be stopped.
+            if (!isEncryptedOpenSSHPrivateKey(rewrapped)) {
+                throw new GeneralSecurityException(
+                        "ssh-keygen reported success but the generated private key is not encrypted");
+            }
+            return rewrapped;
         } finally {
             try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
         }
+    }
+
+    /**
+     * True if this is an OpenSSH private key whose contents are encrypted.
+     * <p>
+     * The openssh-key-v1 container names its cipher in the clear: the magic is followed by an
+     * SSH string holding the cipher name, which is literally "none" for an unencrypted key
+     * (see {@link #buildOpenSSHPrivateKey(java.security.KeyPair, int)}, which writes exactly
+     * that). Anything whose format cannot be read is reported as not encrypted - this backs a
+     * security check, so being unable to prove encryption counts as failing it.
+     */
+    static boolean isEncryptedOpenSSHPrivateKey(String pem) {
+        if (StringUtils.isBlank(pem)) {
+            return false;
+        }
+        String body = StringUtils.substringBetween(pem,
+                "-----BEGIN OPENSSH PRIVATE KEY-----", "-----END OPENSSH PRIVATE KEY-----");
+        if (body == null) {
+            return false;
+        }
+        byte[] decoded;
+        try {
+            decoded = Base64.getMimeDecoder().decode(body);
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
+        if (decoded.length < OPENSSH_KEY_MAGIC.length + 4) {
+            return false;
+        }
+        if (!Arrays.equals(Arrays.copyOf(decoded, OPENSSH_KEY_MAGIC.length), OPENSSH_KEY_MAGIC)) {
+            return false;
+        }
+        ByteBuffer buffer = ByteBuffer.wrap(decoded, OPENSSH_KEY_MAGIC.length,
+                decoded.length - OPENSSH_KEY_MAGIC.length);
+        int cipherLength = buffer.getInt();
+        if (cipherLength < 0 || cipherLength > buffer.remaining()) {
+            return false;
+        }
+        byte[] cipher = new byte[cipherLength];
+        buffer.get(cipher);
+        return !CIPHER_NONE.equals(new String(cipher, StandardCharsets.US_ASCII));
     }
 }

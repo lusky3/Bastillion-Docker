@@ -20,6 +20,7 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 
 /**
@@ -42,6 +43,14 @@ public class PublicKeyDB {
     public static final String CREATE_DT = "create_dt";
     public static final String SORT_BY_CREATE_DT = CREATE_DT;
     public static final String SORT_BY_USERNAME = "username";
+    /**
+     * Columns the public key lists may be ordered by - see
+     * {@link SortedSet#toOrderByClause(Set)}. Mirrors the sortable headers in
+     * admin/view_keys.html and manage/view_keys.html.
+     */
+    private static final Set<String> SORTABLE_FIELDS = Set.of(
+            SORT_BY_KEY_NM, SORT_BY_PROFILE, SORT_BY_TYPE, SORT_BY_FINGERPRINT,
+            SORT_BY_CREATE_DT, SORT_BY_USERNAME);
 
     private PublicKeyDB() {
     }
@@ -138,7 +147,7 @@ public class PublicKeyDB {
 
         ArrayList<PublicKey> publicKeysList = new ArrayList<>();
 
-        String orderBy = sortedSet.toOrderByClause();
+        String orderBy = sortedSet.toOrderByClause(SORTABLE_FIELDS);
         String sql = "select p.*, u.username from public_keys p, users u where u.id=p.user_id  ";
 
         sql += StringUtils.isNotEmpty(sortedSet.getFilterMap().get(FILTER_BY_USER_ID)) ? " and p.user_id=? " : "";
@@ -195,7 +204,7 @@ public class PublicKeyDB {
         ArrayList<PublicKey> publicKeysList = new ArrayList<>();
 
 
-        String orderBy = sortedSet.toOrderByClause();
+        String orderBy = sortedSet.toOrderByClause(SORTABLE_FIELDS);
         String sql = "select * from public_keys where user_id = ? and enabled=true" + orderBy;
 
         try (Connection con = DBUtils.getConn();
@@ -243,6 +252,39 @@ public class PublicKeyDB {
      * @param publicKeyId key id
      * @return script object
      */
+    /**
+     * The given user's own public key, or null if that key is not theirs.
+     * <p>
+     * Ownership is a condition of the query rather than a field compared afterwards, because
+     * {@link #getPublicKey(Connection, Long)} does not populate userId at all - so a caller
+     * that fetched a key and compared getUserId() would be comparing against null every time,
+     * and would have to get the direction of that test exactly right to fail safe. Scoping it
+     * here means a key that is not the user's simply is not returned.
+     */
+    public static PublicKey getPublicKeyForUser(Long publicKeyId, Long userId)
+            throws SQLException, GeneralSecurityException {
+        try (Connection con = DBUtils.getConn();
+             PreparedStatement stmt = con.prepareStatement(
+                     "select * from public_keys where id=? and user_id=?")) {
+            stmt.setLong(1, publicKeyId);
+            stmt.setLong(2, userId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                PublicKey publicKey = new PublicKey();
+                publicKey.setId(rs.getLong("id"));
+                publicKey.setKeyNm(rs.getString(KEY_NM));
+                publicKey.setPublicKey(rs.getString(PUBLIC_KEY));
+                publicKey.setType(rs.getString("type"));
+                publicKey.setFingerprint(rs.getString("fingerprint"));
+                publicKey.setCreateDt(rs.getTimestamp(CREATE_DT));
+                publicKey.setUserId(rs.getLong("user_id"));
+                return publicKey;
+            }
+        }
+    }
+
     public static PublicKey getPublicKey(Connection con, Long publicKeyId) throws SQLException {
 
         PublicKey publicKey = null;
