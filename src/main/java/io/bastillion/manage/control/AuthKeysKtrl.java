@@ -16,6 +16,7 @@ import io.bastillion.manage.util.EncryptionUtil;
 import io.bastillion.manage.util.PasswordUtil;
 import io.bastillion.manage.util.RefreshAuthKeyUtil;
 import io.bastillion.manage.util.SSHUtil;
+import io.bastillion.manage.util.SshCertificateAuth;
 import loophole.mvc.annotation.Kontrol;
 import loophole.mvc.annotation.MethodType;
 import loophole.mvc.annotation.Model;
@@ -28,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.nio.charset.StandardCharsets;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -75,6 +77,15 @@ public class AuthKeysKtrl extends BaseKontroller {
 
     @Model(name = "existingKeyId")
     Long existingKeyId;
+
+    /**
+     * Whether to offer a downloadable certificate per key - meaningless unless the hosts have
+     * been told to trust the authority, which is what sshCertificateAuth being on implies.
+     */
+    // static so BaseKontroller's binder leaves it alone: it skips static fields, and an
+    // instance field here could be set from the query string, re-exposing the download link.
+    @Model(name = "certificateAuthEnabled")
+    static final Boolean certificateAuthEnabled = SshCertificateAuth.isEnabled();
 
     public AuthKeysKtrl(HttpServletRequest request, HttpServletResponse response) {
         super(request, response);
@@ -163,9 +174,7 @@ public class AuthKeysKtrl extends BaseKontroller {
             handleException(ex);
         }
 
-        return "redirect:/admin/viewKeys.ktrl?sortedSet.orderByDirection=" +
-                sortedSet.getOrderByDirection() + "&sortedSet.orderByField=" +
-                sortedSet.getOrderByField() + "&keyNm=" + publicKey.getKeyNm();
+        return "redirect:/admin/viewKeys.ktrl?" + sortedSet.toQueryString() + "&keyNm=" + publicKey.getKeyNm();
     }
 
     @Kontrol(path = "/admin/deletePublicKey", method = MethodType.GET)
@@ -179,9 +188,7 @@ public class AuthKeysKtrl extends BaseKontroller {
         } catch (SQLException | GeneralSecurityException ex) {
             handleException(ex);
         }
-        return "redirect:/admin/viewKeys.ktrl?sortedSet.orderByDirection=" +
-                sortedSet.getOrderByDirection() + "&sortedSet.orderByField=" +
-                sortedSet.getOrderByField();
+        return "redirect:/admin/viewKeys.ktrl?" + sortedSet.toQueryString();
     }
 
     @Kontrol(path = "/admin/downloadPvtKey", method = MethodType.GET)
@@ -191,7 +198,8 @@ public class AuthKeysKtrl extends BaseKontroller {
 
             if (StringUtils.isNotEmpty(publicKey.getKeyNm()) && StringUtils.isNotEmpty(privateKey)) {
                 getResponse().setContentType("application/octet-stream");
-                getResponse().setHeader("Content-Disposition", "attachment;filename=" + publicKey.getKeyNm() + ".key");
+                getResponse().setHeader("Content-Disposition",
+                        "attachment;filename=" + keyFileBase(publicKey.getKeyNm()) + ".key");
                 try (OutputStream out = getResponse().getOutputStream()) {
                     out.write(privateKey.getBytes());
                     out.flush();
@@ -204,6 +212,79 @@ public class AuthKeysKtrl extends BaseKontroller {
         }
 
         return null;
+    }
+
+    /**
+     * Signs a certificate for one of the user's own public keys and hands it back as a file,
+     * so they can reach a host directly without that key being in its authorized_keys.
+     * <p>
+     * The key is re-read and its owner checked here. PublicKeyDB.getPublicKey(id) fetches any
+     * key by id without regard to who owns it, so taking the id from the request and signing
+     * whatever came back would let any signed-in user obtain a certificate for somebody else's
+     * key - which is the whole credential.
+     */
+    @Kontrol(path = "/admin/downloadUserCertificate", method = MethodType.GET)
+    public String downloadUserCertificate() throws ServletException {
+        try {
+            if (!SshCertificateAuth.isEnabled()) {
+                // The template hides this link when certificates are off, but hiding a link is
+                // not a control: the endpoint has to refuse as well. Hosts configured with
+                // TrustedUserCAKeys during a rollout would otherwise accept a certificate any
+                // signed-in user could mint here while the feature was still switched off.
+                getResponse().sendError(HttpServletResponse.SC_NOT_FOUND);
+                return null;
+            }
+            Long userId = AuthUtil.getUserId(getRequest().getSession());
+            if (publicKey == null || publicKey.getId() == null) {
+                getResponse().sendError(HttpServletResponse.SC_BAD_REQUEST);
+                return null;
+            }
+            // Scoped to this user in the query - see PublicKeyDB.getPublicKeyForUser for why
+            // fetching by id and comparing getUserId() afterwards does not work.
+            PublicKey stored = PublicKeyDB.getPublicKeyForUser(publicKey.getId(), userId);
+            if (stored == null) {
+                getResponse().sendError(HttpServletResponse.SC_FORBIDDEN);
+                return null;
+            }
+
+            String certificate = SshCertificateAuth.userCertificateFor(
+                    stored.getPublicKey(), userId, AuthUtil.getUsername(getRequest().getSession()));
+
+            getResponse().setContentType("application/octet-stream");
+            getResponse().setHeader("Content-Disposition",
+                    "attachment;filename=" + certificateFileName(stored.getKeyNm()));
+            try (OutputStream out = getResponse().getOutputStream()) {
+                out.write((certificate.trim() + "\n").getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            }
+        } catch (GeneralSecurityException ex) {
+            // Reasons a user can act on - no authority yet, no systems assigned, a key type
+            // certificates cannot be issued for.
+            log.error(ex.toString(), ex);
+            addError(ex.getMessage());
+            return adminViewKeys();
+        } catch (IOException | SQLException ex) {
+            handleException(ex);
+        }
+        return null;
+    }
+
+    /**
+     * The download filename stem for a key, from its user-chosen name.
+     * <p>
+     * Restricted to characters that are safe in a filename and in a header: the name comes
+     * from the user, and it was being put into Content-Disposition raw, so a newline in it
+     * split the response headers. It also has to be the same stem for both downloads, because
+     * OpenSSH loads a certificate from "&lt;identity file&gt;-cert.pub" - sanitizing one and
+     * not the other left "alice laptop.key" beside "alice_laptop.key-cert.pub", which ssh
+     * silently ignores.
+     */
+    private static String keyFileBase(String keyName) {
+        return StringUtils.isBlank(keyName) ? "id_ed25519" : keyName.replaceAll("[^A-Za-z0-9_.-]", "_");
+    }
+
+    private static String certificateFileName(String keyName) {
+        return keyFileBase(keyName) + ".key-cert.pub";
     }
 
     /* ------------------------- Validation ------------------------- */

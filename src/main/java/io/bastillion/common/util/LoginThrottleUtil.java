@@ -7,6 +7,7 @@ package io.bastillion.common.util;
 
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -25,7 +26,22 @@ public class LoginThrottleUtil {
     private static final long WINDOW_MILLIS =
             Long.parseLong(AppConfig.getProperty("loginThrottleWindowMinutes", "5")) * 60_000L;
 
+    /**
+     * Hard ceiling on tracked IPs.
+     * <p>
+     * Entries were only ever removed when that same IP came back - a successful login, or a
+     * later attempt that found the window expired. Nothing swept the ones that never
+     * returned, so a spray of failed logins from many distinct sources (trivial over IPv6,
+     * or through a forwarded-for header) grew this map for the lifetime of the process.
+     */
+    private static final int MAX_TRACKED_IPS =
+            Integer.parseInt(AppConfig.getProperty("maxThrottledIPs", "20000"));
+
     private static final ConcurrentHashMap<String, Window> ATTEMPTS = new ConcurrentHashMap<>();
+
+    /** Guards the sweep so only one request pays for it at a time. */
+    private static final java.util.concurrent.atomic.AtomicBoolean EVICTING =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private LoginThrottleUtil() {
     }
@@ -69,6 +85,9 @@ public class LoginThrottleUtil {
         if (StringUtils.isEmpty(clientIP)) {
             return;
         }
+        if (ATTEMPTS.size() >= MAX_TRACKED_IPS && !ATTEMPTS.containsKey(clientIP)) {
+            evictToMakeRoom();
+        }
         ATTEMPTS.compute(clientIP, (ip, window) -> {
             if (window == null || window.isExpired()) {
                 window = new Window();
@@ -76,6 +95,42 @@ public class LoginThrottleUtil {
             window.count.incrementAndGet();
             return window;
         });
+    }
+
+    /**
+     * Drops expired windows, and if that frees nothing, the oldest window.
+     * <p>
+     * Every window expires within WINDOW_MILLIS, so sweeping almost always recovers space;
+     * the cap only binds when more than MAX_TRACKED_IPS distinct addresses fail inside a
+     * single window, which is the attack rather than normal use. Evicting the oldest rather
+     * than refusing to track the new address keeps that from becoming a way to pin the map
+     * full of junk and then guess passwords from an untracked address.
+     */
+    private static void evictToMakeRoom() {
+        // Only one caller gets in. Once the map is full every failed login from a new address
+        // reaches this, and a sweep plus a min() over MAX_TRACKED_IPS entries per request -
+        // synchronously, before the password check - makes the spray that filled the map
+        // cheaper for the attacker than for the server. Letting other callers past while one
+        // sweeps keeps the cost to the thread doing the work.
+        if (!EVICTING.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            ATTEMPTS.values().removeIf(Window::isExpired);
+            if (ATTEMPTS.size() < MAX_TRACKED_IPS) {
+                return;
+            }
+            // The sweep recovered nothing, so every window is live: more distinct addresses
+            // than the cap inside one window, which is the attack rather than ordinary use.
+            // Drop a batch so this is not paid again on the very next attempt.
+            ATTEMPTS.entrySet().stream()
+                    .sorted(Comparator.comparingLong(entry -> entry.getValue().windowStart))
+                    .limit(Math.max(1, MAX_TRACKED_IPS / 10))
+                    .toList()
+                    .forEach(oldest -> ATTEMPTS.remove(oldest.getKey(), oldest.getValue()));
+        } finally {
+            EVICTING.set(false);
+        }
     }
 
     /**
