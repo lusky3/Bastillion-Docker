@@ -6,7 +6,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.bastillion</groupId>
     <artifactId>bastillion</artifactId>
-    <version>6.0.1-SNAPSHOT</version>
+    <version>6.0.3-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>Bastillion</name>
 
@@ -121,6 +121,13 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <version>5.24.0</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- in-memory LDAP server for exercising the LDAP login path end to end -->
+        <dependency>
+            <groupId>com.unboundid</groupId>
+            <artifactId>unboundid-ldapsdk</artifactId>
+            <version>7.0.5</version>
             <scope>test</scope>
         </dependency>
 
