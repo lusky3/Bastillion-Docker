@@ -58,10 +58,17 @@ public class AuthKeysKtrl extends BaseKontroller {
     @Model(name = "userList")
     List<User> userList = new ArrayList<>();
 
-    @Model(name = "publicKey")
+    @Model(name = "publicKey", params = {
+            "publicKey.id",
+            "publicKey.keyNm",
+            "publicKey.keyType",
+            "publicKey.publicKey",
+            "publicKey.passphrase",
+            "publicKey.passphraseConfirm",
+            "publicKey.profile.id"})
     PublicKey publicKey;
 
-    @Model(name = "sortedSet")
+    @Model(name = "sortedSet", params = {"sortedSet.orderByField", "sortedSet.orderByDirection", "sortedSet.filterMap"})
     SortedSet sortedSet = new SortedSet();
 
     @Model(name = "forceUserKeyGenEnabled")
@@ -76,7 +83,7 @@ public class AuthKeysKtrl extends BaseKontroller {
     @Model(name = "userPublicKeyList")
     List<PublicKey> userPublicKeyList = new ArrayList<>();
 
-    @Model(name = "existingKeyId")
+    @Model(name = "existingKeyId", params = {"existingKeyId"})
     Long existingKeyId;
 
     /**
@@ -100,7 +107,8 @@ public class AuthKeysKtrl extends BaseKontroller {
             publicKey = PublicKeyDB.getPublicKey(publicKey.getId());
             PublicKeyDB.enableKey(publicKey.getId());
             reloadKeyViewData();
-            distributePublicKeys(publicKey);
+            // every system: enableKey covers each record of the key, whatever its profile
+            RefreshAuthKeyUtil.refreshAllSystems();
         } catch (SQLException | GeneralSecurityException ex) {
             handleException(ex);
         }
@@ -113,7 +121,8 @@ public class AuthKeysKtrl extends BaseKontroller {
             publicKey = PublicKeyDB.getPublicKey(publicKey.getId());
             PublicKeyDB.disableKey(publicKey.getId());
             reloadKeyViewData();
-            distributePublicKeys(publicKey);
+            // every system: disableKey covers each record of the key, whatever its profile
+            RefreshAuthKeyUtil.refreshAllSystems();
         } catch (SQLException | GeneralSecurityException ex) {
             handleException(ex);
         }
@@ -197,7 +206,7 @@ public class AuthKeysKtrl extends BaseKontroller {
         try {
             String privateKey = EncryptionUtil.decrypt((String) getRequest().getSession().getAttribute(PVT_KEY));
 
-            if (StringUtils.isNotEmpty(publicKey.getKeyNm()) && StringUtils.isNotEmpty(privateKey)) {
+            if (publicKey != null && StringUtils.isNotEmpty(publicKey.getKeyNm()) && StringUtils.isNotEmpty(privateKey)) {
                 getResponse().setContentType("application/octet-stream");
                 getResponse().setHeader("Content-Disposition",
                         "attachment;filename=" + keyFileBase(publicKey.getKeyNm()) + ".key");
@@ -343,8 +352,7 @@ public class AuthKeysKtrl extends BaseKontroller {
     private void validatePublicKey(Long userId) throws ServletException, SQLException, GeneralSecurityException {
         if (StringUtils.isBlank(publicKey.getPublicKey())) {
             addFieldError(PUBLIC_KEY_PUBLIC_KEY, REQUIRED);
-        } else if (OpenSSHKeyUtil.getFingerprint(publicKey.getPublicKey()) == null ||
-                OpenSSHKeyUtil.getKeyType(publicKey.getPublicKey()) == null) {
+        } else if (!OpenSSHKeyUtil.isWellFormedPublicKey(publicKey.getPublicKey())) {
             addFieldError(PUBLIC_KEY_PUBLIC_KEY, INVALID);
         } else if (PublicKeyDB.isKeyDisabled(OpenSSHKeyUtil.getFingerprint(publicKey.getPublicKey()))) {
             addError("This key has been disabled. Please generate and set a new public key.");
