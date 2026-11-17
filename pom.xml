@@ -91,7 +91,7 @@
         <dependency>
             <groupId>org.thymeleaf</groupId>
             <artifactId>thymeleaf</artifactId>
-            <version>3.1.6.RELEASE</version>
+            <version>3.1.7.RELEASE</version>
         </dependency>
 
         <!-- MVC framework tests -->
@@ -153,7 +153,7 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.86</version>
+            <version>1.87</version>
         </dependency>
 
         <!-- JSON -->
@@ -206,12 +206,12 @@
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
             <artifactId>jetty-server</artifactId>
-            <version>12.1.14</version>
+            <version>12.1.15</version>
         </dependency>
         <dependency>
             <groupId>org.eclipse.jetty.ee10</groupId>
             <artifactId>jetty-ee10-webapp</artifactId>
-            <version>12.1.14</version>
+            <version>12.1.15</version>
         </dependency>
         <!-- JAAS LoginModule SPI (LdapLoginModule, AbstractLoginModule, ObjectCallback) used
              directly by ExternalAuthUtil - Jetty 12 dropped the standalone jetty-jaas
@@ -220,12 +220,12 @@
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
             <artifactId>jetty-security</artifactId>
-            <version>12.1.14</version>
+            <version>12.1.15</version>
         </dependency>
         <dependency>
             <groupId>org.eclipse.jetty.ee10.websocket</groupId>
             <artifactId>jetty-ee10-websocket-jakarta-server</artifactId>
-            <version>12.1.14</version>
+            <version>12.1.15</version>
         </dependency>
 
         <!-- Jakarta Servlet API (EE10 - jetty-ee10-webapp pulls this in transitively, but it's
@@ -437,7 +437,7 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
-                <version>3.6.4</version>
+                <version>3.7.0</version>
                 <configuration>
                     <mainClass>${exec.mainClass}</mainClass>
                 </configuration>
