@@ -181,7 +181,7 @@ jobs:
 
     - name: Run Grype vulnerability scanner
       id: grype
-      uses: anchore/scan-action@v7.4.2
+      uses: anchore/scan-action@v7.4.3
       with:
         image: lusky3/bastillion:scan
         fail-build: false
